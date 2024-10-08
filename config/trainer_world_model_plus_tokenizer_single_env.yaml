@@ -1,0 +1,75 @@
+defaults:
+  - _self_
+  - tokenizer: default
+  - world_model: default
+  - actor_critic: default
+
+wandb:
+  mode: online
+  project: ScalingWorldModel
+  entity: null
+  name: ${common.env}_epoch_${common.epochs}_cql_weight_${actor_critic.cql_weight}
+  group: wm_plus_critic_single_envs_patch_6*6
+  tags: null
+  notes: null
+
+initialization:
+  load_tokenizer: outputs_single_env/tokenizer_plus_world_model/2024-06-16/11-56-50/checkpoints/epoch_2000
+  load_optimizer_tokenizer: False  # True  # False
+  load_world_model: ${initialization.load_tokenizer}  # ${initialization.load_tokenizer}  # null
+  load_optimizer_world_model: False  # True  # False
+  load_start_epoch: False  # True  # False
+
+common:
+  env: Centipede
+  epochs: 2000
+  device: cuda
+  do_checkpoint: True  # save optimizer
+  seed: 0
+  sequence_length: ${world_model.max_blocks}
+
+training:
+  should: True
+  world_size: 8
+  log_interval: 10
+  max_ckpts: 5
+  dtype: bfloat16
+  tokenizer:
+    should: False  # True  # False
+    learning_rate: 0.00001
+    batch_num_samples: 256
+    max_grad_norm: 1.0
+  world_model:
+    learning_rate: 0.00001  # 0.0001  # 0.00001
+    train_critic: True  # False  # True
+    critic_lr: 0.00025
+    alpha_lr: 0.0
+    batch_num_samples: 128
+    max_grad_norm: 1.0
+    weight_decay: 0.01
+    imagine_horizon: ${common.sequence_length}
+
+evaluation:
+  should: True
+  every: 1
+  world_model:
+    save_reconstructions: False  # True  # False
+    critic_eval_every: 50
+  env:
+    num_eval_episodes: 1
+    max_time: 180  # seconds
+    fps: 15
+    header: False  # verbose info
+    do_reconstruction: False  # save reconstruction images with original images
+    save_mode: False  # save mp4 video
+
+datasets:
+  train:
+    num_of_workers: 4
+  test:
+    num_of_workers: ${datasets.train.num_of_workers}
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

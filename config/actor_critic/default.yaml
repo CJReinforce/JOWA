@@ -1,0 +1,32 @@
+latent_dim: 512  # 768
+mlp_dim: 768  # 1792
+num_q: 1  # 1  # 3
+dropout: 0.01
+
+gamma: 0.99
+
+# target network update
+tau: 0.001  # soft update
+target_update_frequency: 1000  # hard update
+
+# epsilon-greedy
+initial_epsilon: 1.0
+final_epsilon: 0.1
+final_training_steps: 100000
+
+# Q distribution
+vmin: -10
+vmax: 30
+num_atoms: 51  # 121
+
+# loss weight
+use_task_embed: True
+use_imaginary_batch: True
+policy_in_imagination: 'planning'
+td_loss: c51  # c51  # mse
+q_penalty: cql  # cql  # half_cql  # null
+cql_weight: 0.1
+use_rem: False
+q_loss_backwards_wm: True
+target_cql_penalty_value: 1.0
+supervised_weight: 0.1  # 0.1  # 1.0

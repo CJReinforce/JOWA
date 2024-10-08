@@ -1,0 +1,80 @@
+defaults:
+  - _self_
+  - tokenizer: default
+  - world_model: default_200M
+  - actor_critic: default_200M
+
+wandb:
+  mode: online
+  project: ScalingWorldModelDLC
+  entity: null
+  name: finetuning_planning_${actor_critic.use_imaginary_batch}_bw_${actor_critic.planning_beam_width}_h_${actor_critic.planning_horizon}_q_loss_${actor_critic.q_penalty}_real_bs_${training.world_model.batch_num_samples}_imagine_bs_${training.world_model.imagine_batch_size}_wm_lr_${training.world_model.learning_rate}_critic_lr_${training.world_model.critic_lr}
+  group: finetuning_wm_critic_env_${common.env}_patch_6*6_params_150M_with_5k_data  # tokenizer_plus_wm_group_patch_6*6  # wm_plus_critic_group_patch_6*6
+  tags: null
+  notes: null
+
+initialization:
+  load_tokenizer: outputs_shoot_group/world_model_plus_critic/2024-09-04/18-19-07/checkpoints/epoch_30_step_1038183  # outputs_finetune_YarsRevenge/tokenizer_plus_world_model/2024-09-22/16-52-06/checkpoints/epoch_100_step_38100  # outputs_finetune_Robotank/tokenizer_plus_world_model/2024-09-22/16-49-30/checkpoints/epoch_94_step_40232  # outputs_shoot_group/world_model_plus_critic/2024-09-04/18-19-07/checkpoints/epoch_30_step_1038183
+  load_optimizer_tokenizer: False  # True  # False
+  load_world_model: ${initialization.load_tokenizer}  # ${initialization.load_tokenizer}  # null
+  load_world_model_name: world_model_200M
+  load_optimizer_world_model: False  # True  # False
+  load_start_epoch: False  # True  # False
+
+common:
+  env: [Breakout]  # [Pong, Robotank, YarsRevenge]
+  epochs: 1000
+  device: cuda
+  do_checkpoint: True  # save optimizer
+  seed: 0
+  sequence_length: ${world_model.max_blocks}
+
+training:
+  should: True
+  world_size: 1
+  log_interval: 50
+  max_ckpts: 2
+  dtype: bfloat16
+  tokenizer:
+    should: True  # True  # False
+    learning_rate: 0.00005
+    batch_num_samples: 32
+    max_grad_norm: 1.0
+  world_model:
+    learning_rate: 0.00005  # 0.00005  # 0.0001  # 0.00001
+    train_critic: True  # False  # True
+    critic_lr: 0.00005
+    alpha_lr: 0.0
+    batch_num_samples: 24  # 32
+    imagine_batch_size: 8
+    train_critic_after_n_steps: 0
+    imagine_after_n_steps: 3000
+    max_grad_norm: 1.0
+    weight_decay: 0.01
+    imagine_horizon: ${common.sequence_length}
+
+evaluation:
+  should: False
+  every: 1
+  world_model:
+    save_reconstructions: True  # True  # False
+    critic_eval_step_frequency: 10e10  # ${actor_critic.target_update_frequency}  # 1000
+    critic_eval_epoch_frequency: 3
+  env:
+    env_name: MsPacman  # SpaceInvaders  # Carnival
+    num_eval_episodes: 1
+    num_given_steps: 8
+    max_time: 180  # seconds
+    fps: 15
+    header: False  # verbose info
+    do_reconstruction: False  # save reconstruction images with original images
+    save_mode: False  # save mp4 video
+
+datasets:
+  train:
+    num_of_workers: 32
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

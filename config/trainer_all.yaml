@@ -1,0 +1,67 @@
+defaults:
+  - _self_
+  - tokenizer: default
+  - world_model: default
+  - actor_critic: default
+
+wandb:
+  mode: online
+  project: ScalingWorldModel
+  entity: null
+  name: null
+  group: critic
+  tags: null
+  notes: null
+
+initialization:
+  load_tokenizer: /home/sitonholy/programs/ScalingWorldModel/outputs/2024-03-10/02-17-49/checkpoints/epoch_82_step_400406
+  load_world_model: /home/sitonholy/programs/ScalingWorldModel/outputs/world_model/2024-04-04/21-12-49/checkpoints/epoch_100_step_39697
+
+common:
+  epochs: 100
+  device: cuda
+  do_checkpoint: False
+  seed: 0
+  sequence_length: ${world_model.max_blocks}
+
+training:
+  should: True
+  world_size: 8
+  log_interval: 10
+  max_ckpts: 10
+  dtype: bfloat16
+  tokenizer:
+    learning_rate: 0.00001
+    batch_num_samples: 256
+    grad_acc_steps: 1
+    max_grad_norm: 1.0
+  world_model:
+    learning_rate: 0.00001
+    critic_lr: 0.00025
+    batch_num_samples: 96
+    grad_acc_steps: 1
+    max_grad_norm: 1.0
+    weight_decay: 0.01
+    imagine_horizon: ${common.sequence_length}
+
+evaluation:
+  should: False
+  every: 1
+  tokenizer:
+    batch_num_samples: ${training.tokenizer.batch_num_samples}
+    save_reconstructions: True
+  world_model:
+    epochs: 10
+    batch_num_samples: ${training.world_model.batch_num_samples}
+    save_reconstructions: True
+
+datasets:
+  train:
+    num_of_workers: 4
+  test:
+    num_of_workers: ${datasets.train.num_of_workers}
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
