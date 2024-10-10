@@ -24,7 +24,9 @@ We are in the process of preparing the code and models for release. Stay tuned f
 
 ## Pretraining
 
-`python src/pretrain.py hydra/job_logging=disabled hydra/hydra_logging=disabled`
+```python
+python src/pretrain.py hydra/job_logging=disabled hydra/hydra_logging=disabled
+```
 
 > [!NOTE]
 > The pre-training code is still being organized, due to lots of variable renaming
@@ -33,8 +35,12 @@ We are in the process of preparing the code and models for release. Stay tuned f
 
 Set hyperparameters of evaluation in `eval/eval.sh` and then run this script:
 
-`bash eval/eval.sh`
+```bash
+bash eval/eval.sh
+```
 
 The above command will run the setting number of rollouts (episodes) in parallel. After completing all evaluation processes, get the aggregate scores using the following command:
 
-`python eval/aggregate_scores.py --env BeamRider`
+```python
+python eval/aggregate_scores.py --env BeamRider
+```
