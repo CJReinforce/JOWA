@@ -11,12 +11,20 @@ from game.keymap import get_keymap_and_action_names
 
 
 class AgentEnv:
-    def __init__(self, agent: Agent, env: SingleProcessEnv, keymap_name: str, do_reconstruction: bool) -> None:
+    def __init__(
+        self, 
+        agent: Agent, 
+        env: SingleProcessEnv, 
+        keymap_name: str, 
+        do_reconstruction: bool,
+        verbose: bool = True,
+    ) -> None:
         assert isinstance(env, SingleProcessEnv) or isinstance(env, WorldModelEnv)
         self.agent = agent
         self.env = env
         _, self.action_names = get_keymap_and_action_names(keymap_name)
         self.do_reconstruction = do_reconstruction
+        self.verbose = verbose
         self.obs = None
         self.start_time = None
         self._t = None
@@ -58,8 +66,8 @@ class AgentEnv:
             'clipped_return': self._cliped_return,
             'time': round(time.time() - self.start_time, 1),
         }
-        # if self._t % 500 == 0:
-        print(info)
+        if self.verbose:
+            print(info)
         return obs, reward, done, info
 
     def render(self) -> Image.Image:

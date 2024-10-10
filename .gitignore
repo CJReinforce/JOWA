@@ -7,6 +7,7 @@ results
 slurm*
 experiments
 media
+*aggregaded_scores.csv
 
 
 # Byte-compiled / optimized / DLL files

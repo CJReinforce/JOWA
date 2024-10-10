@@ -50,12 +50,16 @@ def main(cfg: DictConfig):
     world_model = WorldModel(
         obs_vocab_size=cfg.tokenizer.vocab_size,
         act_vocab_size=ATARI_NUM_ACTIONS,
-        config_transformer=instantiate(cfg.world_model),
-        config_critic=instantiate(cfg.actor_critic),
+        config_transformer=instantiate(cfg.transformer),
+        config_critic=instantiate(cfg.critic_head),
         device=device,
     )
     
-    env_token = torch.as_tensor([GAME_NAMES.index(cfg.common.game_name)], dtype=torch.long, device=device)
+    env_token = torch.as_tensor(
+        [GAME_NAMES.index(cfg.common.game_name)], 
+        dtype=torch.long, 
+        device=device
+    )
     agent = Agent(
         tokenizer, 
         world_model, 
@@ -78,7 +82,13 @@ def main(cfg: DictConfig):
     )
     agent.eval()
     
-    env = AgentEnv(agent, test_env, 'atari', do_reconstruction=cfg.common.do_reconstruction)
+    env = AgentEnv(
+        agent, 
+        test_env, 
+        'atari', 
+        do_reconstruction=cfg.common.do_reconstruction,
+        verbose=cfg.common.verbose,
+    )
     keymap = 'empty'
     if cfg.common.do_reconstruction:
         size[1] *= 2
@@ -98,9 +108,8 @@ def main(cfg: DictConfig):
         max_steps=cfg.common.max_steps,
     )
     
-    if cfg.common.print_return_statis:
-        static_metric('clipped_return', episode_info_collect)
-        static_metric('return', episode_info_collect)
+    static_metric('clipped_return', episode_info_collect)
+    static_metric('return', episode_info_collect)
         
         
 def static_metric(name, episode_info_collect):

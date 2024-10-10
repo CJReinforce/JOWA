@@ -22,7 +22,6 @@ num_atoms: 51  # 121
 # loss weight
 use_task_embed: True
 use_imaginary_batch: True
-policy_in_imagination: 'planning'
 td_loss: c51  # c51  # mse
 q_penalty: cql  # cql  # half_cql  # null
 cql_weight: 0.1

@@ -1,19 +1,19 @@
 defaults:
   - _self_
   - tokenizer: default
-  - world_model: default_200M
-  - actor_critic: default_200M
+  - transformer: JOWA_150M
+  - critic_head: JOWA_150M
 
 initialization:
-  path_to_checkpoint: outputs_finetune_Robotank/world_model_plus_critic/2024-09-23/21-32-25/checkpoints/epoch_257_step_109996  # outputs_finetune_YarsRevenge/world_model_plus_critic/2024-09-23/21-36-55/checkpoints/epoch_296_step_112776  # outputs_shoot_group/world_model_plus_critic/2024-09-02/23-55-56/checkpoints/epoch_22_step_453943  # outputs_group/world_model_plus_critic/2024-08-02/01-39-46/checkpoints/epoch_87
+  path_to_checkpoint: null
   load_tokenizer: True
   load_world_model: True
   tokenizer_name: null
-  world_model_name: world_model_200M
+  world_model_name: JOWA_150M
 
 common:
   game_name: Robotank  # BeamRider
-  num_given_steps: 6  # 4~20
+  num_given_steps: 8  # 1~8
   device: "cuda:0"
   use_planning: False  # False  # True
   beam_width: 2
@@ -23,7 +23,7 @@ common:
   max_time: 10e10  # seconds
   max_steps: 10e10
   seed: 0
-  print_return_statis: True
+  verbose: True
   dtype: bfloat16
   fps: 15
   header: False

@@ -9,7 +9,11 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from einops import rearrange
-from flash_attn import flash_attn_func
+try:
+    from flash_attn import flash_attn_func
+    use_flash_attn = True
+except:
+    use_flash_attn = False
 from torch.nn import functional as F
 
 from .kv_caching import KeysValues, KVCache
@@ -45,7 +49,14 @@ class Transformer(nn.Module):
 
     def generate_empty_keys_values(self, n: int, max_tokens: int) -> KeysValues:
         device = self.ln_f.weight.device  # Assumption that all submodules are on the same device
-        return KeysValues(n, self.config.num_heads, max_tokens, self.config.embed_dim, self.config.num_layers, device)
+        return KeysValues(
+            n, 
+            self.config.num_heads, 
+            max_tokens, 
+            self.config.embed_dim, 
+            self.config.num_layers, 
+            device,
+        )
 
     def forward(self, sequences: torch.Tensor, past_keys_values: Optional[KeysValues] = None) -> torch.Tensor:
         assert past_keys_values is None or len(past_keys_values) == len(self.blocks)
@@ -91,11 +102,16 @@ class SelfAttention(nn.Module):
         self.dropout = config.attn_pdrop
         self.proj = nn.Linear(config.embed_dim, config.embed_dim)
             
-        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        self.flash = use_flash_attn
         if not self.flash:
             print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
             causal_mask = torch.tril(torch.ones(config.max_tokens, config.max_tokens))
-            block_causal_mask = torch.max(causal_mask, torch.block_diag(*[torch.ones(config.tokens_per_block, config.tokens_per_block) for _ in range(config.max_blocks)]))
+            block_causal_mask = torch.max(
+                causal_mask, 
+                torch.block_diag(*[
+                    torch.ones(config.tokens_per_block, config.tokens_per_block) for _ in range(config.max_blocks)
+                ])
+            )
             self.register_buffer('mask', causal_mask if config.attention == 'causal' else block_causal_mask)
 
     def forward(self, x: torch.Tensor, kv_cache: Optional[KVCache] = None) -> torch.Tensor:
@@ -116,17 +132,13 @@ class SelfAttention(nn.Module):
             
         # causal self-attention
         if self.flash:
-            # efficient attention using Flash Attention CUDA kernels
-            # with torch.backends.cuda.sdp_kernel(
-            #     enable_flash=True,
-            #     enable_math=False,
-            #     enable_mem_efficient=False,
-            #     enable_cudnn=False
-            # ):
-            #     y = torch.nn.functional.scaled_dot_product_attention(
-            #         q, k, v, attn_mask=None, dropout_p=self.dropout if self.training else 0, is_causal=True)
-            y = flash_attn_func(q.transpose(1, 2), k.transpose(1, 2).to(dtype=q.dtype), v.transpose(1, 2).to(dtype=q.dtype),
-                                dropout_p=self.dropout if self.training else 0, causal=True)
+            y = flash_attn_func(
+                q.transpose(1, 2), 
+                k.transpose(1, 2).to(dtype=q.dtype), 
+                v.transpose(1, 2).to(dtype=q.dtype),
+                dropout_p=self.dropout if self.training else 0, 
+                causal=True
+            )
             y = rearrange(y, 'b t h e -> b t (h e)')
         else:
             # manual implementation of attention
