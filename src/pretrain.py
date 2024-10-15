@@ -34,12 +34,11 @@ from action_tokenizer import (
     batch_tokenize_envs,
     tokenize_actions,
 )
-from agent_expand_kv_cache import Agent
-from atari_env_wrapper import AtariEnvWrapper
-from envs import SingleProcessEnv
+from agent import Agent
+from envs import AtariEnvWrapper, SingleProcessEnv
 from game import AgentEnv, Game
 from make_reconstructions import make_reconstructions_of_trajectories
-from models.world_model_all_in_one import WorldModel
+from models.world_model import WorldModel
 from utils import capitalize_game_name, configure_optimizer, set_seed
 
 warnings.filterwarnings("ignore")
@@ -667,15 +666,15 @@ def hydra_main(*args, **kw):
         return main_wrapper
     return main_decorator
 
-@hydra_main(config_path="../config", config_name="trainer_world_model_plus_tokenizer_shoot_group_40M")
+@hydra_main(config_path="../config", config_name="pretrain_40M")
 def get_hydra_config(cfg: DictConfig) -> DictConfig:
     return cfg
 
-@hydra_main(config_path="../config", config_name="trainer_world_model_plus_tokenizer_shoot_group_80M")
+@hydra_main(config_path="../config", config_name="pretrain_70M")
 def get_hydra_config2(cfg: DictConfig) -> DictConfig:
     return cfg
 
-@hydra_main(config_path="../config", config_name="trainer_world_model_plus_tokenizer_shoot_group_200M")
+@hydra_main(config_path="../config", config_name="pretrain_150M")
 def get_hydra_config3(cfg: DictConfig) -> DictConfig:
     return cfg
 

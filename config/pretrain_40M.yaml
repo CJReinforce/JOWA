@@ -1,0 +1,74 @@
+defaults:
+  - _self_
+  - tokenizer: default
+  - transformer: JOWA_40M
+  - critic_head: JOWA_40M
+
+wandb:
+  mode: online
+  project: JOWA
+  entity: null
+  name: epoch_${common.epochs}_batch_size_${training.world_model.batch_num_samples}_wm_lr_${training.world_model.learning_rate}_critic_lr_${training.world_model.critic_lr}_supervise_weight_${actor_critic.supervised_weight}_cql_weight_${actor_critic.cql_weight}
+  group: null
+  tags: null
+  notes: null
+
+initialization:
+  load_tokenizer: null  # path
+  load_optimizer_tokenizer: False
+  load_world_model: ${initialization.load_tokenizer}
+  load_optimizer_world_model: False
+  load_start_epoch: False
+
+common:
+  envs: [Phoenix, Centipede, SpaceInvaders, Carnival, NameThisGame, Assault, Atlantis, BeamRider, Seaquest, TimePilot, Berzerk, Zaxxon, DemonAttack, ChopperCommand, StarGunner]
+  epochs: 100
+  device: cuda
+  do_checkpoint: True  # save optimizer
+  seed: 0
+  sequence_length: ${world_model.max_blocks}
+
+training:
+  should: True
+  world_size: 8
+  log_interval: 500
+  max_ckpts: 20
+  dtype: bfloat16
+  tokenizer:
+    should: True
+    learning_rate: 0.0001
+    batch_num_samples: 256
+    max_grad_norm: 1.0
+  world_model:
+    learning_rate: 0.00005  # 0.00005  # 0.0001
+    train_critic: False  # False  # True
+    critic_lr: 0.00005
+    alpha_lr: 0.0
+    batch_num_samples: 64
+    max_grad_norm: 1.0
+    weight_decay: 0.01
+
+evaluation:
+  should: True
+  every: 1
+  world_model:
+    save_reconstructions: True
+    critic_eval_epoch_frequency: 1
+  env:
+    env_name: Assault
+    num_eval_episodes: 1
+    num_given_steps: 8
+    max_time: 180  # seconds
+    fps: 15
+    header: False  # verbose info
+    do_reconstruction: False  # save reconstruction images with original images
+    save_mode: True  # save mp4 video
+
+datasets:
+  train:
+    num_of_workers: 6
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

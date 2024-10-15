@@ -21,14 +21,15 @@ common:
   num_eval_episodes: 1
 
   max_time: 10e10  # seconds
-  max_steps: 10e10
+  max_steps: 108000
   seed: 0
   verbose: True
   dtype: bfloat16
   fps: 15
   header: False
-  do_reconstruction: True  # False
-  save_mode: True  # False
+  do_reconstruction: False
+  save_mode: True
+  save_rgb_img: True
 
 hydra:
   run:

@@ -2,6 +2,7 @@ import random
 import shutil
 from collections import OrderedDict
 from pathlib import Path
+from typing import Dict
 
 import cv2
 import numpy as np
@@ -10,8 +11,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from functorch import combine_state_for_ensemble
 
-from episode import Episode
 
+Batch = Dict[str, torch.Tensor]
 
 def configure_optimizer(model, learning_rate, weight_decay, critic_lr, *blacklist_module_names):
     """Credits to https://github.com/karpathy/minGPT"""
@@ -52,23 +53,6 @@ def configure_optimizer(model, learning_rate, weight_decay, critic_lr, *blacklis
         {"params": [param_dict[pn] for pn in sorted(list(head_q))], "weight_decay": weight_decay, "lr": critic_lr},
     ]
     optimizer = torch.optim.AdamW(optim_groups)
-    return optimizer
-
-
-def configure_optimizer_for_critic_head(model, learning_rate, weight_decay):
-    decay = set()
-    for mn, m in model.named_modules():
-        for pn, p in m.named_parameters():
-            fpn = '%s.%s' % (mn, pn) if mn else pn  # full param nameif '.head_q.' in fpn:
-            if '.head_q.' in fpn:
-                decay.add(fpn)
-
-    # create the pytorch optimizer object
-    param_dict = {pn: p for pn, p in model.named_parameters()}
-    optim_groups = [
-        {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": weight_decay},
-    ]
-    optimizer = torch.optim.AdamW(optim_groups, lr=learning_rate)
     return optimizer
 
 
@@ -158,35 +142,6 @@ class LossWithIntermediateLosses:
             self.intermediate_losses[k] = v / value
         self.loss_total = self.loss_total / value
         return self
-
-
-class EpisodeDirManager:
-    def __init__(self, episode_dir: Path, max_num_episodes: int) -> None:
-        self.episode_dir = episode_dir
-        self.episode_dir.mkdir(parents=False, exist_ok=True)
-        self.max_num_episodes = max_num_episodes
-        self.best_return = float('-inf')
-
-    def save(self, episode: Episode, episode_id: int, epoch: int) -> None:
-        if self.max_num_episodes is not None and self.max_num_episodes > 0:
-            self._save(episode, episode_id, epoch)
-
-    def _save(self, episode: Episode, episode_id: int, epoch: int) -> None:
-        ep_paths = [p for p in self.episode_dir.iterdir() if p.stem.startswith('episode_')]
-        assert len(ep_paths) <= self.max_num_episodes
-        if len(ep_paths) == self.max_num_episodes:
-            to_remove = min(ep_paths, key=lambda ep_path: int(ep_path.stem.split('_')[1]))
-            to_remove.unlink()
-        episode.save(self.episode_dir / f'episode_{episode_id}_epoch_{epoch}.pt')
-
-        ep_return = episode.compute_metrics().episode_return
-        if ep_return > self.best_return:
-            self.best_return = ep_return
-            path_best_ep = [p for p in self.episode_dir.iterdir() if p.stem.startswith('best_')]
-            assert len(path_best_ep) in (0, 1)
-            if len(path_best_ep) == 1:
-                path_best_ep[0].unlink()
-            episode.save(self.episode_dir / f'best_episode_{episode_id}_epoch_{epoch}.pt')
 
 
 class RandomHeuristic:

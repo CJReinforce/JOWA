@@ -14,7 +14,7 @@ from action_tokenizer import (
     GAME_NAMES,
     LIMITED_ACTION_TO_FULL_ACTION,
 )
-from dataset import Batch
+from utils import Batch
 
 action_masks = []
 

@@ -10,8 +10,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 
-from dataset import Batch
-from utils import LossWithIntermediateLosses, custom_weight_init
+from utils import Batch, LossWithIntermediateLosses, custom_weight_init
 
 from .lpips import LPIPS
 from .nets import Decoder, Encoder, ShiftAug

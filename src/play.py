@@ -10,16 +10,14 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig
 
 from action_tokenizer import ATARI_NUM_ACTIONS, GAME_NAMES
-from agent_expand_kv_cache import Agent
-from atari_env_wrapper import AtariEnvWrapper
-from envs import SingleProcessEnv
+from agent import Agent
+from envs import AtariEnvWrapper, SingleProcessEnv
 from game import AgentEnv, Game
-from models.world_model_q_distributional import WorldModel
+from models.world_model import WorldModel
 from utils import set_seed
 
 warnings.filterwarnings("ignore")
 torch.backends.cudnn.benchmark = True
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 os.environ["SDL_VIDEODRIVER"] = "dummy"
 
 
@@ -28,7 +26,7 @@ def main(cfg: DictConfig):
     print('#' * 50)
     info = {
         'game': cfg.common.game_name, 
-        'num_given_steps': cfg.common.num_given_steps, 
+        'buffer_size': cfg.common.num_given_steps, 
         'use_planning': cfg.common.use_planning,
         'beam_width': cfg.common.beam_width, 
         'horizon': cfg.common.horizon,
@@ -67,7 +65,6 @@ def main(cfg: DictConfig):
         cfg.common.dtype, 
         cfg.common.num_given_steps, 
         device, 
-        use_kv_cache=False, 
         should_plan=cfg.common.use_planning,
         beam_width=cfg.common.beam_width,
         horizon=cfg.common.horizon
@@ -101,11 +98,12 @@ def main(cfg: DictConfig):
         verbose=bool(cfg.common.header), 
         record_mode=bool(cfg.common.save_mode),
         num_eval_episodes=cfg.common.num_eval_episodes,
+        save_in_rgb=cfg.common.save_rgb_img
     )
     episode_info_collect = game.run(
         max_time=cfg.common.max_time, 
-        num_given_steps=cfg.common.num_given_steps, 
         max_steps=cfg.common.max_steps,
+        name_prefix=f'{cfg.initialization.world_model_name}_play_{cfg.common.game_name}',
     )
     
     static_metric('clipped_return', episode_info_collect)

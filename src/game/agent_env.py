@@ -5,9 +5,9 @@ import torch
 from einops import rearrange
 from PIL import Image
 
-from agent_expand_kv_cache import Agent
+from agent import Agent
 from envs import SingleProcessEnv, WorldModelEnv
-from game.keymap import get_keymap_and_action_names
+from .keymap import get_keymap_and_action_names
 
 
 class AgentEnv:

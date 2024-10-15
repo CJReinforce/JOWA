@@ -34,12 +34,11 @@ from action_tokenizer import (
     batch_tokenize_envs,
     tokenize_actions,
 )
-from agent_expand_kv_cache import Agent
-from atari_env_wrapper import AtariEnvWrapper
-from envs import SingleProcessEnv
+from agent import Agent
+from envs import AtariEnvWrapper, SingleProcessEnv
 from game import AgentEnv, Game
 from make_reconstructions import make_reconstructions_of_trajectories
-from models.world_model_all_in_one import WorldModel
+from models.world_model import WorldModel
 from replay_buffer import ReplayBuffer
 from utils import (
     capitalize_game_name,

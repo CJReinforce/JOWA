@@ -52,7 +52,8 @@ def collect_scores(files):
             if clip_undone:
                 for i in range(1, 20):
                     original_returns = read_last_line(file, i)
-                    temp = re.search(r"timestep': (\d+).+return': (\d+\.?\d*),", original_returns)
+                    # "timestep': 7522, 'action': 'rightfire', 'return': 5320.0, 'clipped_return'
+                    temp = re.search(r"timestep': (\d+).+'return': (\d+\.?\d*),", original_returns)
                     if temp is not None:
                         timestep = int(temp.group(1))
                         if timestep >= clip_least_timestep:

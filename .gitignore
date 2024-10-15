@@ -1,13 +1,18 @@
 # Custom
 wandb
 .vscode
-outputs
 outputs*
-results
+results_*
 slurm*
 experiments
 media
 *aggregaded_scores.csv
+old/
+temp.py
+eval_wo_planning.sh
+eval/base_scores.py
+eval/reproduce_JOWA_results_in_table_2.py
+results/results.csv
 
 
 # Byte-compiled / optimized / DLL files
