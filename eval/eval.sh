@@ -73,7 +73,7 @@ for i in "${buffer_size[@]}"; do
         device="cuda:$gpu_id" 
         k=$((k + 1))
 
-        /root/miniconda3/envs/lwm38/bin/python src/play.py \
+        python src/play.py \
         transformer=$model_name \
         critic_head=$model_name \
         initialization.path_to_checkpoint=$ckpt_path \
