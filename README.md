@@ -21,7 +21,7 @@ Welcome to the official repository for our paper: "Scaling Offline Model-Based R
     </div>
     <p class="note">
       *Training used 84x84 grayscale images. RGB demos shown here for better visualization. 
-      For Atlantis, only the first 7 minutes of the 2-hour gameplay are displayed.
+      For Atlantis, only the first 7 minutes of the 2-hour gameplay are displayed. More demos are <a href=demos/>here</a>.
     </p><br>
   </div>
   
