@@ -6,18 +6,18 @@ Welcome to the official repository for our paper: "Scaling Offline Model-Based R
 
 <div class="gallery">
     <div class="row">
-      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Assault.gif" alt="Assault" width=160>
-      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Atlantis.gif" alt="Atlantis" width=190 height=auto>
-      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/NameThisGame.gif" alt="NameThisGame" width=190>
-      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/ChopperCommand.gif" alt="ChopperCommand" width=190>
-      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/DemonAttack.gif" alt="DemonAttack" width=190>
+      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Assault.gif" alt="Assault" width=16%>
+      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Atlantis.gif" alt="Atlantis" width=19%>
+      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/NameThisGame.gif" alt="NameThisGame" width=19%>
+      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/ChopperCommand.gif" alt="ChopperCommand" width=19%>
+      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/DemonAttack.gif" alt="DemonAttack" width=19%>
     </div>
     <div class="row">
-      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Carnival.gif" alt="Carnival" width=160>
-      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Seaquest.gif" alt="Seaquest" width=190>
-      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/SpaceInvaders.gif" alt="SpaceInvaders" width=190>
-      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/TimePilot.gif" alt="TimePilot" width=190>
-      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Zaxxon.gif" alt="Zaxxon" width=190>
+      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Carnival.gif" alt="Carnival" width=16%>
+      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Seaquest.gif" alt="Seaquest" width=19%>
+      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/SpaceInvaders.gif" alt="SpaceInvaders" width=19%>
+      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/TimePilot.gif" alt="TimePilot" width=19%>
+      <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Zaxxon.gif" alt="Zaxxon" width=19%>
     </div>
     <p class="note">
       *Training used 84x84 grayscale images. RGB demos shown here for better visualization. For Atlantis (second in the first row),
