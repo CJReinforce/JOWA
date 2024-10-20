@@ -20,15 +20,14 @@ Welcome to the official repository for our paper: "Scaling Offline Model-Based R
       <img src="https://raw.githubusercontent.com/CJReinforce/JOWA_agents/refs/heads/master/static/images/Zaxxon.gif" alt="Zaxxon">
     </div>
     <p class="note">
-      *Training used 84x84 grayscale images. RGB demos shown here for better visualization. 
-      For Atlantis, only the first 7 minutes of the 2-hour gameplay are displayed. More demos are <a href=demos/>here</a>.
-    </p><br>
-  </div>
+      *Training used 84x84 grayscale images. RGB demos shown here for better visualization. For Atlantis (second in the first row), <br>
+        only the first 7 minutes of the 2-hour gameplay are displayed. More demos are <a href=demos/>here</a>.
+    </p>
+</div>
   
-We are still updating and optimizing the code. Stay tuned for updates and additional resources!
+***We are still updating and optimizing the code. Stay tuned for updates and additional resources!***
 
-## Requirements
-### Installation
+## Installation
 
 - python 3.8: `conda create -n jowa python=3.8 && conda activate jowa`
 - Install basic dependencies for compatibility: `pip install setuptools==65.5.0 wheel==0.38.4 packaging`
@@ -37,9 +36,9 @@ We are still updating and optimizing the code. Stay tuned for updates and additi
 - If evaluating, install jq to parse JSON files: `apt install jq`
 - If training, set the wandb account: `wandb login`, `<API keys>`
 
-The model weights of 3 JOWA variants are already in [this repo](checkpoints/JOWA).
-
 ## Eval
+
+Download the model weights from [here](checkpoints/JOWA).
 
 Set hyperparameters of evaluation in `eval/eval.sh`, such as `model_name`, `game`, `num_rollouts`, and `num_gpus`. Then run this script:
 
@@ -62,23 +61,24 @@ python results/results.py
 > [!NOTE]
 > We found that some hyperparameters in a few groups of previous evaluation experiments (shown in the early version of paper) were set incorrectly. After the correction (already done in the current version of code), all JOWA variants achieved higher IQM HNS, and the scaling trend still holds. We will update the paper to show the corrected results.
 
+## Training
 ### Dataset
 
 - Download original DQN-Replay dataset: `python src/datasets/download.py`
-- Save filterd trajectory-level dataset in csv format: `python src/datasets/filter_in_csv.py`
+- Save filtered trajectory-level dataset in csv format: `python src/datasets/filter_in_csv.py`
 - Save filtered trajectory-level dataset in structured dir (obs in .png format, others in .npy for each trajectory): `python src/datasets/save.py`
 - Save filtered segment-level dataset in csv format: `python src/datasets/save_segment_in_csv.py`
 
 > [!NOTE]
 > We will optimize the data preprocessing code to make it more simple.
 
-## Pretraining
+### Pretraining
 
 ```python
 python src/pretrain.py hydra/job_logging=disabled hydra/hydra_logging=disabled
 ```
 
-## Fine-tuning
+### Fine-tuning
 
 ```python
 python src/fine_tune.py hydra/job_logging=disabled hydra/hydra_logging=disabled
