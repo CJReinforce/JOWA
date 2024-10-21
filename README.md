@@ -38,7 +38,7 @@ Welcome to the official repository for our paper: "Scaling Offline Model-Based R
 
 ## 📊 Eval
 
-Download the model weights from [here](checkpoints/JOWA).
+Download the model weights from [here](checkpoints/JOWA) or [google drive](https://drive.google.com/drive/folders/1YHaCemhobchJWE5zt28TUrKp2tp8yysF?usp=sharing).
 
 Set hyperparameters of evaluation in `eval/eval.sh`, such as `model_name`, `game`, `num_rollouts`, and `num_gpus`. Then run this script:
 
