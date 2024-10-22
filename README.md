@@ -1,6 +1,5 @@
-<div align="center" style="display: flex; align-items: center; justify-content: center;">
-  <img src="static/img/logo.png" alt="Logo" width="44" style="margin-right: 10px;">
-  <h1 style="font-weight:bold; font-size:2.0em; letter-spacing:2.0px; margin: 0;">JOWA</h1>
+<div align="center">
+   <img src="static/img/logo.png" alt="Logo" width="128" />
 </div>
 
 ---
