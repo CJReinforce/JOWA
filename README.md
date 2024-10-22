@@ -1,4 +1,9 @@
-# Scaling Offline Model-Based RL via Jointly-Optimized World-Action Model Pretraining
+<div align="center" style="display: flex; align-items: center; justify-content: center;">
+  <img src="static/img/logo.png" alt="Logo" width="44" style="margin-right: 10px;">
+  <h1 style="font-weight:bold; font-size:2.0em; letter-spacing:2.0px; margin: 0;">JOWA</h1>
+</div>
+
+---
 
 Welcome to the official repository for our paper: "Scaling Offline Model-Based RL via Jointly-Optimized World-Action Model Pretraining".
 
@@ -21,7 +26,7 @@ Welcome to the official repository for our paper: "Scaling Offline Model-Based R
     </div>
     <p class="note">
       *Training used 84x84 grayscale images. RGB demos shown here for better visualization. For Atlantis (second in the first row),
-        only the first 7 minutes of the 2-hour gameplay are displayed. More demos are <a href=demos/>here</a>.
+        only the first 7 minutes of the 2-hour gameplay are displayed. More demos are <a href=static/mp4>here</a>.
     </p>
 </div>
   
