@@ -1,3 +1,4 @@
+import functools
 import random
 import shutil
 from collections import OrderedDict
@@ -5,6 +6,7 @@ from pathlib import Path
 from typing import Dict
 
 import cv2
+import hydra
 import numpy as np
 import torch
 import torch.nn as nn
@@ -79,13 +81,42 @@ def custom_weight_init(m):
             m.bias.data.fill_(0.0)
 
 
+def get_dtype(dtype: str):
+    if dtype == 'float16':
+        return torch.float16
+    elif dtype == 'bfloat16':
+        return torch.bfloat16
+    else:
+        return torch.float32
+
+
+def hydra_main(*args, **kw):
+    main = hydra.main(*args, **kw)
+    def main_decorator(f):
+        returned_values = []
+        @functools.wraps(f)
+        def f_wrapper(*args, **kw):
+            ret = f(*args, **kw)
+            returned_values.append(ret)
+            return ret
+        wrapped = main(f_wrapper)
+        @functools.wraps(wrapped)
+        def main_wrapper(*args, **kw):
+            wrapped(*args, **kw)
+            return returned_values[0] if len(returned_values) == 1 else returned_values
+        return main_wrapper
+    return main_decorator
+
+
 def capitalize_game_name(game):
     game = game.replace('-', '_')
     return ''.join([g.capitalize() for g in game.split('_')])
 
 
 def extract_state_dict(state_dict, module_name):
-    return OrderedDict({k.split('.', 1)[1]: v for k, v in state_dict.items() if k.startswith(module_name)})
+    return OrderedDict({
+        k.split('.', 1)[1]: v for k, v in state_dict.items() if k.startswith(module_name)
+    })
 
 
 def set_seed(seed):
