@@ -50,10 +50,7 @@ from utils import (
 
 warnings.filterwarnings("ignore")
 torch.backends.cudnn.benchmark = True
-
 os.environ["SDL_VIDEODRIVER"] = "dummy"
-os.environ['MASTER_ADDR'] = 'localhost'
-os.environ['MASTER_PORT'] = '21755'
 
 
 class AtariTrajectory(Dataset):

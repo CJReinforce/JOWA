@@ -4,11 +4,13 @@ import torch
 
 class ReplayBuffer(object):
     """Buffer to store environment transitions."""
-    def __init__(self, sequence_length, capacity, obs_token_len, device):
+    def __init__(self, sequence_length, capacity, obs_shape, device):
         self.capacity = capacity
         self.device = device
+        self.obs_shape = obs_shape
 
-        self.obses = np.empty((capacity, sequence_length, obs_token_len), dtype=int)
+        obs_type = int if len(obs_shape) == 1 else np.uint8
+        self.obses = np.empty((capacity, sequence_length, *obs_shape), dtype=obs_type)
         self.actions = np.empty((capacity, sequence_length), dtype=int)
         self.rewards = np.empty((capacity, sequence_length), dtype=np.float32)
         self.dones = np.empty((capacity, sequence_length), dtype=bool)
@@ -70,12 +72,13 @@ class ReplayBuffer(object):
                                  self.capacity if self.full else self.idx,
                                  size=batch_size)
 
-        obses = torch.as_tensor(self.obses[idxs], device=self.device).to(torch.long)
-        actions = torch.as_tensor(self.actions[idxs], device=self.device).to(torch.long)
-        rewards = torch.as_tensor(self.rewards[idxs], device=self.device).to(torch.float32)
-        dones = torch.as_tensor(self.dones[idxs], device=self.device).to(torch.long)
-        mask_paddings = torch.as_tensor(self.mask_paddings[idxs], device=self.device).to(bool)
-        envs = torch.as_tensor(self.envs[idxs], device=self.device).to(torch.long)
+        obs_type = torch.long if len(self.obs_shape) == 1 else torch.uint8
+        obses = torch.as_tensor(self.obses[idxs], device=self.device, dtype=obs_type)
+        actions = torch.as_tensor(self.actions[idxs], device=self.device, dtype=torch.long)
+        rewards = torch.as_tensor(self.rewards[idxs], device=self.device, dtype=torch.float32)
+        dones = torch.as_tensor(self.dones[idxs], device=self.device, dtype=torch.long)
+        mask_paddings = torch.as_tensor(self.mask_paddings[idxs], device=self.device, dtype=torch.bool)
+        envs = torch.as_tensor(self.envs[idxs], device=self.device, dtype=torch.long)
 
         return dict(
             observations=obses,

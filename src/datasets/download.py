@@ -1,9 +1,24 @@
+import itertools
 import os
 from multiprocessing import Pool
 from subprocess import Popen
 
 URI = 'gs://atari-replay-datasets/dqn/{}/{}/replay_logs/'
-BASE_DIR = 'original_dataset/'
+BASE_DIR = 'dataset/original_dataset/'
+# 60
+# ENVS = [
+#     'AirRaid', 'Alien', 'Amidar', 'Assault', 'Asterix', 'Asteroids', 'Atlantis',
+#     'BankHeist', 'BattleZone', 'BeamRider', 'Berzerk', 'Bowling', 'Boxing',
+#     'Breakout', 'Carnival', 'Centipede', 'ChopperCommand', 'CrazyClimber',
+#     'DemonAttack', 'DoubleDunk', 'ElevatorAction', 'Enduro', 'FishingDerby',
+#     'Freeway', 'Frostbite', 'Gopher', 'Gravitar', 'Hero', 'IceHockey',
+#     'Jamesbond', 'JourneyEscape', 'Kangaroo', 'Krull', 'KungFuMaster',
+#     'MontezumaRevenge', 'MsPacman', 'NameThisGame', 'Phoenix', 'Pitfall',
+#     'Pong', 'Pooyan', 'PrivateEye', 'Qbert', 'Riverraid', 'RoadRunner',
+#     'Robotank', 'Seaquest', 'Skiing', 'Solaris', 'SpaceInvaders', 'StarGunner',
+#     'Tennis', 'TimePilot', 'Tutankham', 'UpNDown', 'Venture', 'VideoPinball',
+#     'WizardOfWor', 'YarsRevenge', 'Zaxxon'
+# ]
 # 20
 ENVS = [
         'assault', 'atlantis', 'beam-rider',
@@ -43,7 +58,7 @@ def _download(name, env, index, epoch, dir_path):
     file_name = '$store$_{}_ckpt.{}.gz'.format(name, epoch)
     uri = URI.format(env, index) + file_name
     path = os.path.join(dir_path, file_name)
-    p = Popen(['gsutil', '-m', 'cp', '-R', uri, path])
+    p = Popen(['gsutil', '-m', 'cp', '-R', '-n', uri, path])
     p.wait()
     return path
 
@@ -54,19 +69,22 @@ def download_dataset(env, index, epoch, base_dir=BASE_DIR):
     _download('reward', env, index, epoch, dir_path)
     _download('terminal', env, index, epoch, dir_path)
     
-def main(env_):
-    start_epoch, end_epoch = 0, 55
-
-    env = capitalize_game_name(env_)
-    for index in range(1, 6):
-        for epoch in range(start_epoch, end_epoch + 1):
-            path = get_dir_path(env, index, epoch)
-            if not inspect_dir_path(env, index, epoch):
-                os.makedirs(path, exist_ok=True)
-                download_dataset(env, index, epoch)
+def main(args):
+    env_, index, epoch = args
+    env = capitalize_game_name(env_) if env_[0].islower() else env_
+    path = get_dir_path(env, index, epoch)
+    if not inspect_dir_path(env, index, epoch):
+        os.makedirs(path, exist_ok=True)
+        download_dataset(env, index, epoch)
 
 
 if __name__ == "__main__":
-    num_processes = len(ENVS)
+    num_processes = 64
+
+    indices = range(1, 6)  # 5 agents
+    epochs = range(1, 51)  # 50 epochs
+
+    all_args = list(itertools.product(ENVS, indices, epochs))
+
     with Pool(num_processes) as pool:
-        pool.map(main, ENVS)
+        pool.map(main, all_args)
