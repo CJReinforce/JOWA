@@ -66,14 +66,27 @@ python results/results.py
 > We found that some hyperparameters in a few groups of previous evaluation experiments (shown in the early version of paper) were set incorrectly. After the correction (already done in the current version of code), all JOWA variants achieved higher IQM HNS, and the scaling trend still holds. We will update the paper to show the corrected results.
 
 ## 🔧 Training
-### Dataset
+### Dataset for pretraining
 
-- Download original DQN-Replay dataset with multi-processes: `python src/datasets/download.py`
-- Save downsampled trajectory-level dataset in structured dir (obs in .png format, others in .npy for each trajectory): `python src/datasets/save_downsampled_traj.py`
-- Split trajectory-level dataset into into segments in CSV format: `python src/datasets/save_segment_in_csv.py`
+1. Download Raw Dataset
 
-> [!NOTE]
-> We will optimize the data preprocessing code to make it more simple.
+```bash
+python src/datasets/download.py
+```
+
+This will enable multi-process to download the original DQN-Replay dataset containing 20 games (approximately 1TB for 20 games and 3.1TB for all 60 games).
+
+2. Process and Downsample Data
+
+```bash
+python src/datasets/downsample.py
+```
+
+This command processes the raw data into two formats:
+
+(i) Trajectory-level dataset: Structured directory containing observations (.png files), rewards, actions, and terminal states (.npy files) for each trajectory. Total size: ~?TB (ii) Segment-level dataset: CSV files containing segment indices in the correspoding trajectory. Size: ~1.7GB
+
+During training, the `Dataset` class first indexes segments using the CSV file, then loads the actual segment data from the trajectory-level structured dir.
 
 ### Pretraining
 
@@ -93,5 +106,6 @@ python src/fine_tune.py hydra/job_logging=disabled hydra/hydra_logging=disabled
 ## 📝 TODO
 
 - \[x\] Release model weights.
-- \[x\] Optimize evaluation codes.
+- \[x\] Optimize evaluation code.
+- \[x\] Optimize data preprocessing.
 - \[ \] Merge and optimize pretraining & fine-tuning codes.

@@ -57,7 +57,7 @@ def compute_cumulative_num_of_episodes(envs, num_agents):
     
     return env_choosed_indices, cumu_episodes, df
         
-def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, env_index):
+def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, save_dir, L, tau, env_index):
     set_seed(0)
     # index of downsampled trajectories
     sample_episodes_this_env = sorted(np.random.randint(
@@ -66,6 +66,9 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, env_
     env = envs[env_index]
     env = capitalize_game_name(env) if env[0].islower() else env
     downsampled_steps = 0
+
+    segment_right_padding_dataset = []
+    segment_left_padding_dataset = []
     
     for j in tqdm(range(num_sample_episodes[env_index]), desc=env):
         # find the choosed episode in which agent & epoch
@@ -102,17 +105,40 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, env_
             sample_start_index = where_terminated[delta_index-1] + 1 if delta_index != 0 else 0
             sample_end_index = where_terminated[delta_index] + 1
             downsampled_steps += sample_end_index - sample_start_index
+
+            # save segment-level dataset in CSV format
+            # right padding for pretraining
+            segment_start_index_right_padding = np.arange(sample_start_index, sample_end_index, tau) - sample_start_index
+            segment_end_index_right_padding = segment_start_index_right_padding + L
+            segment_right_padding_dataset_per_traj = {
+                'Episode index': [j] * len(segment_start_index_right_padding),
+                'Start index': segment_start_index_right_padding,
+                'End index': segment_end_index_right_padding,
+                'Environment': [env] * len(segment_start_index_right_padding)
+            }
+            segment_right_padding_dataset.append(pd.DataFrame(segment_right_padding_dataset_per_traj))
             
+            # left padding for training involving imagination
+            segment_end_index_left_padding = np.arange(sample_end_index-1, sample_start_index, -tau) - sample_start_index
+            segment_start_index_left_padding = segment_end_index_left_padding - L
+            segment_left_padding_dataset_per_traj = {
+                'Episode index': [j] * len(segment_start_index_left_padding),
+                'Start index': segment_start_index_left_padding,
+                'End index': segment_end_index_left_padding,
+                'Environment': [env] * len(segment_start_index_left_padding)
+            }
+            segment_left_padding_dataset.append(pd.DataFrame(segment_left_padding_dataset_per_traj))
+
+            # save downsampled trajectory in structured dir
             last_obs_path = None  # obs cache due to extensive time for reading obs gzip
             
-            # save downsampled trajectory in structured dir
             for index, content in enumerate(['observation', 'action', 'reward', 'terminal']):
-                # save_path: dataset/downsampled_dataset/trajectory/{env}/{index of trajectory in downsampled dataset}/{o,a,r,d}
-                save_path = os.path.join(save_dir, f"{env}/{j}/{content}/")
-                if os.path.exists(save_path) and \
-                    ((index == 0 and len(os.listdir(save_path)) >= sample_end_index - sample_start_index) or \
-                        (index != 0 and len(os.listdir(save_path)) >= 1)):
-                    continue
+                # save_path: dataset/downsampled/trajectory/{env}/{index of trajectory in downsampled dataset}/{o,a,r,d}
+                save_path = os.path.join(save_dir, f"trajectory/{env}/{j}/{content}/")
+                # if os.path.exists(save_path) and \
+                #     ((index == 0 and len(os.listdir(save_path)) >= sample_end_index - sample_start_index) or \
+                #         (index != 0 and len(os.listdir(save_path)) >= 1)):
+                #     continue
                 
                 path = path_format.format(env, k, content, l)
                 
@@ -141,16 +167,24 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, env_
                         array if index != 3 else np.clip(array, 0, 1)
                     )
     
-    return downsampled_steps
+    segment_right_padding_dataset = pd.concat(segment_right_padding_dataset)
+    segment_left_padding_dataset = pd.concat(segment_left_padding_dataset)
+    return downsampled_steps, segment_right_padding_dataset, segment_left_padding_dataset
 
 
 if __name__ == '__main__':
     path_format = 'dataset/original/{}/{}/replay_logs/$store$_{}_ckpt.{}.gz'
-    save_dir = 'dataset/downsampled/trajectory'
+    save_dir = 'dataset/downsampled/'
+    segment_level_dataset_csv_name_prefix = '15_training_games_segments'
     
     num_agents = 2  # use data from 2 agents
-    num_steps_per_env = 10e6
+    num_steps_per_env = 10e6  # num of transitions per env (10M)
     envs = TRAIN_ENVS
+    num_processes = 64
+
+    # split trajectory into segments for training 
+    L = 8  # segment length
+    tau = 4  # split offset
 
     set_seed(0)
     
@@ -159,7 +193,34 @@ if __name__ == '__main__':
     num_sample_episodes = np.ceil(num_steps_per_env / df.loc[:, 'Steps per episode'].values).astype(int)
     df['Downsampled episodes'] = num_sample_episodes
     
-    partial_main = partial(main, envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes)
-    results = process_map(partial_main, range(len(envs)), max_workers=64, chunksize=1)
-    df['Downsampled steps'] = results
+    partial_main = partial(
+        main, envs, env_choosed_indices, cumu_episodes, 
+        df, num_sample_episodes, save_dir, L, tau
+    )
+    results = process_map(partial_main, range(len(envs)), max_workers=num_processes, chunksize=1)
+
+    downsampled_steps = []
+    segment_right_padding_dataset = []
+    segment_left_padding_dataset = []
+    for result in results:
+        i,j,k = result
+        downsampled_steps.append(i)
+        segment_right_padding_dataset.append(j)
+        segment_left_padding_dataset.append(k)
+    
+    df['Downsampled steps'] = downsampled_steps
+    segment_right_padding_dataset = pd.concat(segment_right_padding_dataset)
+    segment_left_padding_dataset = pd.concat(segment_left_padding_dataset)
+    
     print(df)
+
+    # save segment-level dataset in CSV format
+    os.makedirs(os.path.join(save_dir, "segment/csv"), exist_ok=True)
+
+    left_padding_path = os.path.join(
+        save_dir, f"segment/csv/{segment_level_dataset_csv_name_prefix}_left_padding.csv")
+    right_padding_path = os.path.join(
+        save_dir, f"segment/csv/{segment_level_dataset_csv_name_prefix}_right_padding.csv")
+    
+    segment_right_padding_dataset.to_csv(right_padding_path, index=False)
+    segment_left_padding_dataset.to_csv(left_padding_path, index=False)
