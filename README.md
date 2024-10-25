@@ -68,10 +68,9 @@ python results/results.py
 ## 🔧 Training
 ### Dataset
 
-- Download original DQN-Replay dataset: `python src/datasets/download.py`
-- Save filtered trajectory-level dataset in csv format: `python src/datasets/filter_in_csv.py`
-- Save filtered trajectory-level dataset in structured dir (obs in .png format, others in .npy for each trajectory): `python src/datasets/save.py`
-- Save filtered segment-level dataset in csv format: `python src/datasets/save_segment_in_csv.py`
+- Download original DQN-Replay dataset with multi-processes: `python src/datasets/download.py`
+- Save downsampled trajectory-level dataset in structured dir (obs in .png format, others in .npy for each trajectory): `python src/datasets/save_downsampled_traj.py`
+- Split trajectory-level dataset into into segments in CSV format: `python src/datasets/save_segment_in_csv.py`
 
 > [!NOTE]
 > We will optimize the data preprocessing code to make it more simple.
