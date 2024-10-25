@@ -4,7 +4,7 @@ from multiprocessing import Pool
 from subprocess import Popen
 
 URI = 'gs://atari-replay-datasets/dqn/{}/{}/replay_logs/'
-BASE_DIR = 'dataset/original_dataset/'
+BASE_DIR = 'dataset/original/'
 # 60
 # ENVS = [
 #     'AirRaid', 'Alien', 'Amidar', 'Assault', 'Asterix', 'Asteroids', 'Atlantis',

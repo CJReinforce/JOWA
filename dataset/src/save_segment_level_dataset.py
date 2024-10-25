@@ -100,8 +100,8 @@ if __name__ == "__main__":
         sequence_length=8,
     )
 
-    num_processes = 70
-    idx_split = np.array_split(np.arange(len(train_dataset)-1,-1,-1), num_processes)
+    num_processes = 64
+    idx_split = np.array_split(np.arange(len(train_dataset)), num_processes)
     # main(train_dataset, idx_split[0])
     processes = []
 

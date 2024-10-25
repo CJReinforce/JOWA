@@ -58,12 +58,17 @@ def compute_cumulative_num_of_episodes(envs, num_agents):
     return env_choosed_indices, cumu_episodes, df
         
 def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, env_index):
-    sample_episodes_this_env = np.random.randint(
-        0, df.loc[envs[env_index], 'Total episodes'], num_sample_episodes[env_index])
+    set_seed(0)
+    # index of downsampled trajectories
+    sample_episodes_this_env = sorted(np.random.randint(
+        0, df.loc[envs[env_index], 'Total episodes'], num_sample_episodes[env_index]))
+    
     env = envs[env_index]
     env = capitalize_game_name(env) if env[0].islower() else env
+    downsampled_steps = 0
     
-    for j in range(num_sample_episodes[env_index]):
+    for j in tqdm(range(num_sample_episodes[env_index]), desc=env):
+        # find the choosed episode in which agent & epoch
         find_flag = False
         for index_k, k in enumerate(env_choosed_indices[env]):
             for index_l, l in enumerate(range(1, 51)):
@@ -77,7 +82,7 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, env_
             print(f"ERROR: Env: {env}, Episode: {sample_episodes_this_env[j]} not found!")
             continue
         else:
-            # find indices in terminal
+            # find the offset of choosed episode in the coresspoding agent & epoch
             if index_l == 0:
                 if index_k == 0:
                     start_index = 0
@@ -85,21 +90,24 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, env_
                     start_index = cumu_episodes[env_index, index_k-1, -1]
             else:
                 start_index = cumu_episodes[env_index, index_k, index_l-1]
+            delta_index = sample_episodes_this_env[j] - start_index
             
             path = path_format.format(env, k, 'terminal', l)
             with gzip.open(path, 'rb') as f:
                 done = np.load(f, allow_pickle=False)
             done = np.clip(done, 0, 1)
             
+            # find the start and end index of the choosed episode in the coresspoding agent & epoch
             where_terminated = np.where(done == 1)[0]
-            delta_index = sample_episodes_this_env[j] - start_index
-            
             sample_start_index = where_terminated[delta_index-1] + 1 if delta_index != 0 else 0
             sample_end_index = where_terminated[delta_index] + 1
+            downsampled_steps += sample_end_index - sample_start_index
             
-            last_obs_path = None
+            last_obs_path = None  # obs cache due to extensive time for reading obs gzip
             
+            # save downsampled trajectory in structured dir
             for index, content in enumerate(['observation', 'action', 'reward', 'terminal']):
+                # save_path: dataset/downsampled_dataset/trajectory/{env}/{index of trajectory in downsampled dataset}/{o,a,r,d}
                 save_path = os.path.join(save_dir, f"{env}/{j}/{content}/")
                 if os.path.exists(save_path) and \
                     ((index == 0 and len(os.listdir(save_path)) >= sample_end_index - sample_start_index) or \
@@ -121,25 +129,37 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, env_
                 
                 os.makedirs(save_path, exist_ok=True)
                 
+                # {save_path..}/observation/{step in that trajectory}.png
+                # {save_path..}/{a,r,d}/0.npy
                 if index == 0:
                     last_obs_path = path
-                    for j in range(len(array)):
-                        cv2.imwrite(os.path.join(save_path, f"{j}.png"), array[j])
+                    for i in range(len(array)):
+                        cv2.imwrite(os.path.join(save_path, f"{i}.png"), array[i])
                 else:
-                    np.save(os.path.join(save_path, "0.npy"), array)
-                    
+                    np.save(
+                        os.path.join(save_path, "0.npy"), 
+                        array if index != 3 else np.clip(array, 0, 1)
+                    )
+    
+    return downsampled_steps
+
 
 if __name__ == '__main__':
-    path_format = 'dataset/original_dataset/{}/{}/replay_logs/$store$_{}_ckpt.{}.gz'
-    save_dir = 'dataset/filtered_dataset/'
+    path_format = 'dataset/original/{}/{}/replay_logs/$store$_{}_ckpt.{}.gz'
+    save_dir = 'dataset/downsampled/trajectory'
     
     num_agents = 2  # use data from 2 agents
     num_steps_per_env = 10e6
-    
-    set_seed(0)
+    envs = TRAIN_ENVS
 
-    env_choosed_indices, cumu_episodes, df = compute_cumulative_num_of_episodes(TRAIN_ENVS, num_agents)
-    num_sample_episodes = np.ceil(num_steps_per_env / df.loc[:, 'Steps per episode'].values).astype(int)
+    set_seed(0)
     
-    partial_main = partial(main, TRAIN_ENVS, env_choosed_indices, cumu_episodes, df, num_sample_episodes)
-    process_map(main, range(len(TRAIN_ENVS)), max_workers=64, chunksize=1)
+    env_choosed_indices, cumu_episodes, df = compute_cumulative_num_of_episodes(envs, num_agents)
+    
+    num_sample_episodes = np.ceil(num_steps_per_env / df.loc[:, 'Steps per episode'].values).astype(int)
+    df['Downsampled episodes'] = num_sample_episodes
+    
+    partial_main = partial(main, envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes)
+    results = process_map(partial_main, range(len(envs)), max_workers=64, chunksize=1)
+    df['Downsampled steps'] = results
+    print(df)
