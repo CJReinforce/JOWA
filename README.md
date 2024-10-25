@@ -68,7 +68,7 @@ python results/results.py
 ## 🔧 Training
 ### Dataset for pretraining
 
-1. Download Raw Dataset
+1. Download raw dataset
 
 ```bash
 python src/datasets/download.py
@@ -76,15 +76,13 @@ python src/datasets/download.py
 
 This will enable multi-process to download the original DQN-Replay dataset containing 20 games (approximately 1TB for 20 games and 3.1TB for all 60 games).
 
-2. Process and Downsample Data
+2. Process and downsample data
 
 ```bash
 python src/datasets/downsample.py
 ```
 
-This command processes the raw data into two formats:
-
-(i) Trajectory-level dataset: Structured directory containing observations (.png files), rewards, actions, and terminal states (.npy files) for each trajectory. Total size: ~?TB (ii) Segment-level dataset: CSV files containing segment indices in the correspoding trajectory. Size: ~1.7GB
+This command processes the raw data into two formats: **(i) Trajectory-level dataset:** Structured directory containing observations (.png files), rewards, actions, and terminal states (.npy files) for each trajectory. Total size: ~?TB **(ii) Segment-level dataset:** CSV files containing segment indices in the correspoding trajectory. Size: ~1.7GB
 
 During training, the `Dataset` class first indexes segments using the CSV file, then loads the actual segment data from the trajectory-level structured dir.
 
