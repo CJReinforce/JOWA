@@ -34,7 +34,7 @@ Welcome to the official repository for our paper: "Scaling Offline Model-Based R
 ## 🚀 Installation
 
 - python 3.8: `conda create -n jowa python=3.8 && conda activate jowa`
-- Install basic dependencies for compatibility: `pip install setuptools==65.5.0 wheel==0.38.4 packaging`
+- Install basic dependencies for compatibility: `pip install setuptools==65.5.0 wheel==0.38.4 packaging pip==24.0`
 - Install [other dependencies](requirements.txt): `pip install -r requirements.txt`
 - (Optional but recommended) Install Flash-Attention: `pip install flash-attn --no-build-isolation`
 - If evaluating, install jq to parse JSON files: `apt install jq`
