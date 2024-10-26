@@ -168,12 +168,12 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, save
 
 
 if __name__ == '__main__':
-    path_format = '/mnt/coai_nas/shenglai/atari_google_dataset/origin_atari_google_dataset/{}/{}/replay_logs/$store$_{}_ckpt.{}.gz'
+    path_format = 'dataset/original/{}/{}/replay_logs/$store$_{}_ckpt.{}.gz'
     save_dir = 'dataset/downsampled/'
     segment_level_dataset_csv_name_prefix = '15_training_games_segments'
     
     num_agents = 2  # use data from 2 agents
-    num_steps_per_env = 10e3  # num of transitions per env (10M)
+    num_steps_per_env = 10e6  # num of transitions per env (10M)
     envs = TRAIN_ENVS
     num_processes = 64
 
