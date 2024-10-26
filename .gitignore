@@ -13,7 +13,8 @@ eval/eval_wo_planning.sh
 eval/base_scores.py
 eval/reproduce_JOWA_results_in_table_2.py
 results/results.csv
-dataset/original_dataset
+dataset/downsampled
+dataset/original
 
 
 # Byte-compiled / optimized / DLL files

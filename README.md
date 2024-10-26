@@ -82,17 +82,7 @@ This will enable multi-process to download the original DQN-Replay dataset (~1TB
 python src/datasets/downsample.py
 ```
 
-This command processes the raw data into two formats: **(i) Trajectory-level dataset:** Structured directory containing observations (.png files), rewards, actions, and terminals (.npy files) for each trajectory. Total size: ~0.6TB for the default 20 games. **(ii) Segment-level dataset:** CSV files containing segment indices in the correspoding trajectory.
-
-During training, the `Dataset.__getitem__()` first indexes segments using the CSV file, then loads the actual segment data from the trajectory-level structured dir.
-
-3. (Optional) Save segments in `.pkl` format to trading storage space (~8TB) for load time:
-
-```bash
-python src/dataset/save_segments_in_pkl.py
-```
-
-Rename the class function `__getitem_backup__` to `__getitem__` in the file `src/dataset.py` to enable the corresponding data loading way.
+This command processes the raw data into two formats: **(i) Trajectory-level dataset:** A hdf5 file containing transitions for each trajectory. Total size: ~1TB for 15 pretraining games. **(ii) Segment-level dataset:** CSV files containing segment indices in the correspoding trajectory.
 
 ### Pretraining
 
