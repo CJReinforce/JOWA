@@ -11,7 +11,7 @@ class AtariTrajectory(Dataset):
         self.data_path = data_path
         
         df = pd.read_csv(csv_path)
-        # envs: [BeamRider, Berzerk, ...]
+        # envs: [Assault, Atlantis, ...]
         if envs is not None:
             df = df[df['Environment'].isin(envs)].reset_index(drop=True)
         self.trajectories_ind = df
@@ -20,24 +20,7 @@ class AtariTrajectory(Dataset):
         self.transform = ToTensor()
     
     def __len__(self):
-        return len(self.trajectories_ind)
-
-    # get data from .pkl file
-    def __getitem_backup__(self, idx):
-        env = self.trajectories_ind.iloc[idx, -1]
-        env = capitalize_game_name(env) if env[0].islower() else env
-        data_path = os.path.join(self.data_path, env, f"{idx}.pkl")
-        
-        try:
-            with open(data_path, 'rb') as f:
-                data = pickle.load(f)
-            return data
-        
-        except:
-            print('#' * 50)
-            print(f'Warning: {data_path} is incompleted!')
-            idx = np.random.randint(0, len(self))
-            return self.__getitem__(idx)        
+        return len(self.trajectories_ind)      
 
     # get data from structured dir
     def __getitem__(self, idx):
@@ -87,6 +70,21 @@ class AtariTrajectory(Dataset):
             idx = np.random.randint(0, len(self))
             return self.__getitem__(idx)
 
+    # get data from .pkl file
+    def __getitem_backup__(self, idx):
+        data_path = os.path.join(self.data_path, f"{idx}.pkl")
+        
+        try:
+            with open(data_path, 'rb') as f:
+                data = pickle.load(f)
+            return data
+        
+        except:
+            print('#' * 50)
+            print(f'Warning: {data_path} is incompleted!')
+            idx = np.random.randint(0, len(self))
+            return self.__getitem__(idx)  
+    
     def sample_batch(self, batch_num_samples):
         idx = np.random.randint(0, self.__len__(), size=(batch_num_samples,))
         return collate_fn([self.__getitem__(i) for i in idx])

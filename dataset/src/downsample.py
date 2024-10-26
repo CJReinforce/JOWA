@@ -133,13 +133,8 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, save
             last_obs_path = None  # obs cache due to extensive time for reading obs gzip
             
             for index, content in enumerate(['observation', 'action', 'reward', 'terminal']):
-                # save_path: dataset/downsampled/trajectory/{env}/{index of trajectory in downsampled dataset}/{o,a,r,d}
-                save_path = os.path.join(save_dir, f"trajectory/{env}/{j}/{content}/")
-                # if os.path.exists(save_path) and \
-                #     ((index == 0 and len(os.listdir(save_path)) >= sample_end_index - sample_start_index) or \
-                #         (index != 0 and len(os.listdir(save_path)) >= 1)):
-                #     continue
-                
+                # save_path: dataset/downsampled/trajectory/data/{env}/{index of traj in downsampled dataset}/{o,a,r,d}
+                save_path = os.path.join(save_dir, f"trajectory/data/{env}/{j}/{content}/")
                 path = path_format.format(env, k, content, l)
                 
                 if index == 0 and path == last_obs_path:
@@ -173,12 +168,12 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, save
 
 
 if __name__ == '__main__':
-    path_format = 'dataset/original/{}/{}/replay_logs/$store$_{}_ckpt.{}.gz'
+    path_format = '/mnt/coai_nas/shenglai/atari_google_dataset/origin_atari_google_dataset/{}/{}/replay_logs/$store$_{}_ckpt.{}.gz'
     save_dir = 'dataset/downsampled/'
     segment_level_dataset_csv_name_prefix = '15_training_games_segments'
     
     num_agents = 2  # use data from 2 agents
-    num_steps_per_env = 10e6  # num of transitions per env (10M)
+    num_steps_per_env = 10e3  # num of transitions per env (10M)
     envs = TRAIN_ENVS
     num_processes = 64
 
@@ -188,16 +183,21 @@ if __name__ == '__main__':
 
     set_seed(0)
     
-    env_choosed_indices, cumu_episodes, df = compute_cumulative_num_of_episodes(envs, num_agents)
+    env_choosed_indices, cumu_episodes, df = compute_cumulative_num_of_episodes(
+        envs, num_agents)
     
-    num_sample_episodes = np.ceil(num_steps_per_env / df.loc[:, 'Steps per episode'].values).astype(int)
+    num_sample_episodes = np.ceil(
+        num_steps_per_env / df.loc[:, 'Steps per episode'].values).astype(int)
     df['Downsampled episodes'] = num_sample_episodes
     
     partial_main = partial(
         main, envs, env_choosed_indices, cumu_episodes, 
         df, num_sample_episodes, save_dir, L, tau
     )
-    results = process_map(partial_main, range(len(envs)), max_workers=num_processes, chunksize=1)
+    results = process_map(
+        partial_main, range(len(envs)), 
+        max_workers=num_processes, chunksize=1,
+    )
 
     downsampled_steps = []
     segment_right_padding_dataset = []
@@ -213,6 +213,10 @@ if __name__ == '__main__':
     segment_left_padding_dataset = pd.concat(segment_left_padding_dataset)
     
     print(df)
+    # save meta-info of trajectory-level dataset
+    meta_path = os.path.join(save_dir, "trajectory/meta")
+    os.makedirs(meta_path, exist_ok=True)
+    df.to_csv(os.path.join(meta_path, "meta_info.csv"), index=False)
 
     # save segment-level dataset in CSV format
     os.makedirs(os.path.join(save_dir, "segment/csv"), exist_ok=True)
