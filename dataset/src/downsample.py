@@ -1,3 +1,4 @@
+import argparse
 import gzip
 import os
 import random
@@ -31,13 +32,17 @@ def compute_cumulative_num_of_episodes(envs, num_agents):
             for index_epoch, epoch in enumerate(range(1, 51)):
                 path = path_format.format(env, index, 'terminal', epoch)
                 # compute num of episodes in this epoch
-                with gzip.open(path, 'rb') as f:
-                    done = np.load(f, allow_pickle=False)
-                done = np.clip(done, 0, 1)
-                episodes = done.sum()
+                if os.path.exists(path):
+                    with gzip.open(path, 'rb') as f:
+                        done = np.load(f, allow_pickle=False)
+                    done = np.clip(done, 0, 1)
+                    episodes = done.sum()
+
+                    cumu_steps_this_env += done.size
+                else:
+                    episodes = 0
                 
                 cumu_episodes_this_env += episodes
-                cumu_steps_this_env += done.size
                 
                 # compute cumulative index of episodes
                 if index_epoch == 0:
@@ -58,8 +63,22 @@ def compute_cumulative_num_of_episodes(envs, num_agents):
     
     return env_choosed_indices, cumu_episodes, df
         
-def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, save_dir, L, tau, env_index):
+def main(
+    envs, 
+    env_choosed_indices, 
+    cumu_episodes, 
+    df, 
+    num_sample_episodes, 
+    save_dir, 
+    L, 
+    tau, 
+    traj_path,
+    meta_path,
+    seg_csv_path,
+    env_index,
+):
     set_seed(0)
+
     # index of downsampled trajectories
     sample_episodes_this_env = sorted(np.random.randint(
         0, df.loc[envs[env_index], 'Total episodes'], num_sample_episodes[env_index]))
@@ -71,6 +90,9 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, save
     env_traj_data = {}
     segment_right_padding_dataset = []
     segment_left_padding_dataset = []
+    last_obs_path = None  # obs cache due to extensive time for reading obs gzip
+    all_obs_array = None
+    all_array = None
     
     for j in tqdm(range(num_sample_episodes[env_index]), desc=env):
         # find the choosed episode in which agent & epoch
@@ -132,119 +154,115 @@ def main(envs, env_choosed_indices, cumu_episodes, df, num_sample_episodes, save
             segment_left_padding_dataset.append(pd.DataFrame(segment_left_padding_dataset_per_traj))
 
             # save downsampled trajectory in structured dir
-            last_obs_path = None  # obs cache due to extensive time for reading obs gzip
             traj_data = {}
             
             for index, content in enumerate(['observation', 'action', 'reward', 'terminal']):
                 path = path_format.format(env, k, content, l)
                 
                 if index == 0 and path == last_obs_path:
-                    array = all_obs_array[sample_start_index:sample_end_index]
+                    array = all_obs_array[sample_start_index:sample_end_index].copy()
                 elif index == 0:
+                    del all_obs_array
+
                     with gzip.open(path, 'rb') as f:
                         all_obs_array = np.load(f, allow_pickle=False)
-                        array = all_obs_array[sample_start_index:sample_end_index]
+                        array = all_obs_array[sample_start_index:sample_end_index].copy()
+                    
                     last_obs_path = path
                 else:
                     with gzip.open(path, 'rb') as f:
                         all_array = np.load(f, allow_pickle=False)
-                        array = all_array[sample_start_index:sample_end_index]
+                        array = all_array[sample_start_index:sample_end_index].copy()
                 
                 traj_data[content] = array
-        
-        env_traj_data[j] = traj_data
-    
+            env_traj_data[j] = traj_data
+            del all_array
+
     segment_right_padding_dataset = pd.concat(segment_right_padding_dataset)
     segment_left_padding_dataset = pd.concat(segment_left_padding_dataset)
-    return downsampled_steps, env_traj_data, segment_right_padding_dataset, segment_left_padding_dataset
+
+    df.loc[env, 'Downsampled steps'] = downsampled_steps
+
+    # save traj-level dataset in hdf5
+    with h5py.File(os.path.join(traj_path, f"{env}.h5"), 'w') as f:
+        for episode_idx, trajectories in env_traj_data.items():
+            episode_group = f.create_group(str(episode_idx))
+
+            observations = trajectories['observation']
+            actions = trajectories['action']
+            rewards = trajectories['reward']
+            dones = trajectories['terminal']
+
+            episode_group.create_dataset('observations', data=observations)
+            episode_group.create_dataset('actions', data=actions)
+            episode_group.create_dataset('rewards', data=rewards)
+            episode_group.create_dataset('terminals', data=dones)
+    print(f'Save {env} trajectory-level dataset in hdf5.')
+
+    # save meta-info of trajectory-level dataset
+    df.loc[[env], :].to_csv(os.path.join(meta_path, f"{env}.csv"), index=False)
+
+    # save segment-level dataset in CSV format
+    segment_right_padding_dataset.to_csv(f"{seg_csv_path}/{env}_right_padding.csv", index=False)
+    segment_left_padding_dataset.to_csv(f"{seg_csv_path}/{env}_left_padding.csv", index=False)
 
 
 if __name__ == '__main__':
     path_format = 'dataset/original/{}/{}/replay_logs/$store$_{}_ckpt.{}.gz'
     save_dir = 'dataset/downsampled/'
-    segment_level_dataset_csv_name_prefix = '15_games_segments'
     
     num_agents = 2  # use data from 2 agents
     num_steps_per_env = 10e6  # num of transitions per env (10M)
-    envs = TRAIN_ENVS
     num_processes = 64
+    num_splits = 1  # depend on RAM size
+    total_envs = TRAIN_ENVS
 
+    total_envs = list(
+        map(
+            lambda env: capitalize_game_name(env) if env[0].islower() else env, 
+            total_envs
+        )
+    )
+    
     # split trajectory into segments for training 
     L = 8  # segment length
     tau = 4  # split offset
 
     set_seed(0)
-    
-    env_choosed_indices, cumu_episodes, df = compute_cumulative_num_of_episodes(
-        envs, num_agents)
-    
-    num_sample_episodes = np.ceil(
-        num_steps_per_env / df.loc[:, 'Steps per episode'].values).astype(int)
-    df['Downsampled episodes'] = num_sample_episodes
-    
-    partial_main = partial(
-        main, envs, env_choosed_indices, cumu_episodes, 
-        df, num_sample_episodes, save_dir, L, tau
-    )
-    results = process_map(
-        partial_main, range(len(envs)), 
-        max_workers=num_processes, chunksize=1,
-    )
 
-    downsampled_steps = []
-    envs_traj_data = {}
-    segment_right_padding_dataset = []
-    segment_left_padding_dataset = []
-
-    for result, env in zip(results, envs):
-        i,j,k,l = result
-        downsampled_steps.append(i)
-        env = capitalize_game_name(env) if env[0].islower() else env
-        envs_traj_data[env] = j
-        segment_right_padding_dataset.append(k)
-        segment_left_padding_dataset.append(l)
-    
-    df['Downsampled steps'] = downsampled_steps
-    segment_right_padding_dataset = pd.concat(segment_right_padding_dataset)
-    segment_left_padding_dataset = pd.concat(segment_left_padding_dataset)
-    
-    print(df)
-    # save meta-info of trajectory-level dataset
     meta_path = os.path.join(save_dir, "trajectory/meta")
-    os.makedirs(meta_path, exist_ok=True)
-    df.to_csv(os.path.join(meta_path, "meta_info.csv"), index=False)
-    print('Save meta-info of trajectory-level dataset.')
-
-    # save traj-level dataset in hdf5
     traj_path = os.path.join(save_dir, f"trajectory/data")
+    seg_csv_path = os.path.join(save_dir, "segment/csv")
+    os.makedirs(meta_path, exist_ok=True)
     os.makedirs(traj_path, exist_ok=True)
+    os.makedirs(seg_csv_path, exist_ok=True)
 
-    with h5py.File(os.path.join(traj_path, "traj.h5"), 'w') as f:
-        for env_name, episodes in envs_traj_data.items():
-            env_group = f.create_group(env_name)
+    split_envs = np.array_split(total_envs, num_splits)
+    split_envs = [list(split) for split in split_envs]
 
-            for episode_idx, trajectories in episodes.items():
-                episode_group = env_group.create_group(str(episode_idx))
+    for envs in split_envs:
+        env_choosed_indices, cumu_episodes, df = compute_cumulative_num_of_episodes(
+            envs, num_agents)
+        
+        num_sample_episodes = np.ceil(
+            num_steps_per_env / df.loc[:, 'Steps per episode'].values).astype(int)
+        df['Downsampled episodes'] = num_sample_episodes
+        
+        partial_main = partial(
+            main, envs, env_choosed_indices, cumu_episodes, 
+            df, num_sample_episodes, save_dir, L, tau,
+            traj_path, meta_path, seg_csv_path
+        )
 
-                observations = trajectories['observation']
-                actions = trajectories['action']
-                rewards = trajectories['reward']
-                dones = trajectories['terminal']
-
-                episode_group.create_dataset('observation', data=observations)
-                episode_group.create_dataset('action', data=actions)
-                episode_group.create_dataset('reward', data=rewards)
-                episode_group.create_dataset('terminal', data=dones)
-    print('Save trajectory-level dataset in hdf5.')
-
-    # save segment-level dataset in CSV format
-    os.makedirs(os.path.join(save_dir, "segment/csv"), exist_ok=True)
-
-    left_padding_path = os.path.join(
-        save_dir, f"segment/csv/{segment_level_dataset_csv_name_prefix}_left_padding.csv")
-    right_padding_path = os.path.join(
-        save_dir, f"segment/csv/{segment_level_dataset_csv_name_prefix}_right_padding.csv")
+        process_map(
+            partial_main, range(len(envs)), 
+            max_workers=num_processes, chunksize=1,
+        )
     
-    segment_right_padding_dataset.to_csv(right_padding_path, index=False)
-    segment_left_padding_dataset.to_csv(left_padding_path, index=False)
-    print('Save segment-level dataset in csv.')
+    # check the num of transitions
+    meta_files = []
+    for file in os.listdir(meta_path):
+        df = pd.read_csv(os.path.join(meta_path, file))
+        meta_files.append(df)
+    concat_meta_file = pd.concat(meta_files, ignore_index=True)
+    print(concat_meta_file)
