@@ -36,7 +36,15 @@ action:
   vmax: 30
   num_atoms: 51
   td_loss: c51  # in [c51, mse]
+
+  gamma: 0.99
+  cql_weight: 0.1
+  q_penalty: cql
+  q_loss_backwards_wm: True
   use_task_embed: True
+  initial_epsilon: 1.0
+  final_epsilon: 0.1
+  final_training_steps: 20000
 
 hydra:
   run:
