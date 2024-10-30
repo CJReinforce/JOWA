@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 
-from utils import Batch, LossWithIntermediateLosses, custom_weight_init
+from utils import Batch, LossWithIntermediateLosses, init_tokenizer_weights
 
 from .lpips import LPIPS
 from .nets import Decoder, Encoder, ShiftAug
@@ -33,8 +33,8 @@ class Tokenizer(nn.Module):
         self.embedding = nn.Embedding(vocab_size, embed_dim)
         self.post_quant_conv = torch.nn.Conv2d(embed_dim, decoder.config.z_channels, 1)
         self.decoder = decoder
-        self.encoder.apply(custom_weight_init)
-        self.decoder.apply(custom_weight_init)
+        self.encoder.apply(init_tokenizer_weights)
+        self.decoder.apply(init_tokenizer_weights)
         self.embedding.weight.data.uniform_(-1.0 / vocab_size, 1.0 / vocab_size)
         self.lpips = LPIPS().eval() if with_lpips else None
 

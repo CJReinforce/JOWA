@@ -18,7 +18,6 @@ from utils import set_seed
 
 warnings.filterwarnings("ignore")
 torch.backends.cudnn.benchmark = True
-os.environ["SDL_VIDEODRIVER"] = "dummy"
 
 
 @hydra.main(config_path="../config", config_name="eval")
@@ -49,7 +48,8 @@ def main(cfg: DictConfig):
         obs_vocab_size=cfg.tokenizer.vocab_size,
         act_vocab_size=ATARI_NUM_ACTIONS,
         config_transformer=instantiate(cfg.transformer),
-        config_critic=instantiate(cfg.critic_head),
+        config_critic_arch=cfg.critic_head,
+        config_critic_train=cfg.action,
         device=device,
     )
     

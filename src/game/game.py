@@ -1,7 +1,3 @@
-import os
-
-os.environ["SDL_VIDEODRIVER"] = "dummy"
-
 from datetime import datetime
 from pathlib import Path
 from pprint import pprint
@@ -11,10 +7,11 @@ import gym
 import numpy as np
 from PIL import Image
 
-from .agent_env import AgentEnv
 from envs import WorldModelEnv
-from .keymap import get_keymap_and_action_names
 from utils import make_video
+
+from .agent_env import AgentEnv
+from .keymap import get_keymap_and_action_names
 
 
 class Game:

@@ -30,7 +30,6 @@ common:
 
 training:
   should: True
-  world_size: 8
   log_interval: 500
   max_ckpts: 20
   dtype: bfloat16

@@ -1,9 +1,6 @@
 import functools
 import random
-import shutil
-from collections import OrderedDict
-from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import cv2
 import hydra
@@ -12,7 +9,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from functorch import combine_state_for_ensemble
-
 
 Batch = Dict[str, torch.Tensor]
 
@@ -58,7 +54,7 @@ def configure_optimizer(model, learning_rate, weight_decay, critic_lr, *blacklis
     return optimizer
 
 
-def init_weights(module):
+def init_transformer_weights(module):
     if isinstance(module, (nn.Linear, nn.Embedding)):
         module.weight.data.normal_(mean=0.0, std=0.02)
         if isinstance(module, nn.Linear) and module.bias is not None:
@@ -68,8 +64,7 @@ def init_weights(module):
         module.weight.data.fill_(1.0)
 
 
-def custom_weight_init(m):
-    """Custom weight init for Conv2D and Linear layers."""
+def init_tokenizer_weights(m):
     if isinstance(m, nn.Linear):
         nn.init.orthogonal_(m.weight.data)
         if hasattr(m.bias, 'data'):
@@ -90,6 +85,7 @@ def get_dtype(dtype: str):
         return torch.float32
 
 
+# to get hydra config
 def hydra_main(*args, **kw):
     main = hydra.main(*args, **kw)
     def main_decorator(f):
@@ -109,14 +105,11 @@ def hydra_main(*args, **kw):
 
 
 def capitalize_game_name(game):
-    game = game.replace('-', '_')
-    return ''.join([g.capitalize() for g in game.split('_')])
-
-
-def extract_state_dict(state_dict, module_name):
-    return OrderedDict({
-        k.split('.', 1)[1]: v for k, v in state_dict.items() if k.startswith(module_name)
-    })
+    if game[0].islower():
+        game = game.replace('-', '_')
+        return ''.join([g.capitalize() for g in game.split('_')])
+    else:
+        return game
 
 
 def set_seed(seed):
@@ -139,12 +132,6 @@ def load_random_state(cpu_rng_state, cuda_rng_state, numpy_state, python_state):
     torch.cuda.set_rng_state(cuda_rng_state)
     np.random.set_state(numpy_state)
     random.setstate(python_state)
-
-
-def remove_dir(path, should_ask=False):
-    assert path.is_dir()
-    if (not should_ask) or input(f"Remove directory : {path} ? [Y/n] ").lower() != 'n':
-        shutil.rmtree(path)
 
 
 def compute_lambda_returns(rewards, values, ends, gamma, lambda_):
@@ -173,16 +160,6 @@ class LossWithIntermediateLosses:
             self.intermediate_losses[k] = v / value
         self.loss_total = self.loss_total / value
         return self
-
-
-class RandomHeuristic:
-    def __init__(self, num_actions):
-        self.num_actions = num_actions
-
-    def act(self, obs):
-        assert obs.ndim == 4  # (N, H, W, C)
-        n = obs.size(0)
-        return torch.randint(low=0, high=self.num_actions, size=(n,))
 
 
 def make_video(fname, fps, frames):
@@ -290,3 +267,43 @@ class SimNorm(nn.Module):
 		
 	def __repr__(self):
 		return f"SimNorm(dim={self.dim})"
+
+
+class StepNode:
+    def __init__(
+        self, 
+        r: float, 
+        v_star: float, 
+        gamma: float, 
+        batch_idx: int,
+        action=None, 
+        kv_cache=None, 
+        prev: Optional['StepNode'] = None, 
+        critic: Optional[torch.Tensor] = None,
+        obs: Optional[torch.Tensor] = None,
+    ) -> None:
+        self.batch_idx = batch_idx
+        self.r = r
+        self.v_star = v_star
+        self.action = action
+        self.kv_cache = kv_cache
+        self.prev = prev
+        self.critic = critic
+        self.obs = obs
+
+        prev_gamma = 1./gamma if self.prev is None else self.prev.gamma
+        self.gamma = prev_gamma * gamma
+    
+    @property
+    def step(self) -> int:
+        return 0 if self.prev is None else self.prev.step + 1
+
+    @property
+    def sum_r(self) -> float:
+        prev_sum_r = 0. if self.prev is None else self.prev.sum_r
+        prev_gamma = 1. if self.prev is None else self.prev.gamma
+        return prev_sum_r + prev_gamma * self.r
+
+    @property
+    def score(self) -> float:
+        return self.sum_r + self.gamma * self.v_star

@@ -1,10 +1,8 @@
-import argparse
 import gzip
 import os
 import random
 from functools import partial
 
-import cv2
 import h5py
 import numpy as np
 import pandas as pd

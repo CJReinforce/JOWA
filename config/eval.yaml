@@ -12,11 +12,11 @@ initialization:
   world_model_name: JOWA_150M
 
 common:
-  game_name: Robotank  # BeamRider
-  num_given_steps: 8  # 1~8
+  game_name: Assault
+  num_given_steps: 8  # in [1,8]
   device: "cuda:0"
-  use_planning: False  # False  # True
-  beam_width: 2
+  use_planning: False
+  beam_width: 1
   horizon: 0
   num_eval_episodes: 1
 
@@ -28,8 +28,15 @@ common:
   fps: 15
   header: False
   do_reconstruction: False
-  save_mode: True
+  save_mode: False
   save_rgb_img: True
+
+action:
+  vmin: -10
+  vmax: 30
+  num_atoms: 51
+  td_loss: c51  # in [c51, mse]
+  use_task_embed: True
 
 hydra:
   run:

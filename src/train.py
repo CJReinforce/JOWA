@@ -35,6 +35,7 @@ from action_tokenizer import (
     tokenize_actions,
 )
 from agent import Agent
+from dataset import AtariTrajectory, collate_fn
 from envs import AtariEnvWrapper, SingleProcessEnv
 from game import AgentEnv, Game
 from make_reconstructions import make_reconstructions_of_trajectories
@@ -43,6 +44,7 @@ from replay_buffer import ReplayBuffer
 from utils import (
     capitalize_game_name,
     configure_optimizer,
+    get_dtype,
     get_random_state,
     load_random_state,
     set_seed,
@@ -50,19 +52,20 @@ from utils import (
 
 warnings.filterwarnings("ignore")
 torch.backends.cudnn.benchmark = True
-os.environ["SDL_VIDEODRIVER"] = "dummy"
-    
+
 
 class Trainer:
-    def __init__(self, cfg: DictConfig, rank: int) -> None:
+    def __init__(self, cfg: DictConfig) -> None:
         dist.init_process_group(
-            "nccl", 
-            timeout=timedelta(seconds=7200000),  # avoid timeout when evaluating
-            rank=rank, 
-            world_size=cfg.training.world_size,
+            backend="nccl", 
+            timeout=timedelta(
+                seconds=7200000
+            ),  # avoid timeout when evaluating
         )
-        torch.cuda.set_device(rank+7)
+        local_rank = int(os.environ['LOCAL_RANK'])
+        torch.cuda.set_device(local_rank)
         
+        # training description
         self.training_desc = 'world'
         if cfg.training.world_model.train_critic:
             self.training_desc += '-action'
@@ -70,13 +73,23 @@ class Trainer:
             self.training_desc = 'vqvae + ' + self.training_desc
         self.training_desc += ' model'
         
-        self.is_main_process = rank == 0
+        # ddp settings
+        self.world_size = int(os.environ['WORLD_SIZE'])
+        self.rank = int(os.environ['RANK'])
+        self.local_rank = local_rank
+        self.is_main_process = self.rank == 0
 
         # Initialize wandb and saving dir
         if self.is_main_process:
-            print(f"Train {self.training_desc} with {cfg.training.world_size} GPUs.")
+            print(f"Train {self.training_desc} with {self.world_size} GPUs.")
             
-            save_root_dir = Path(f'outputs_finetune_{cfg.common.env[0]}/{self.training_desc.replace(" + ", "_plus_")}/{time.strftime("%Y-%m-%d/%H-%M-%S")}')
+            save_root_dir = Path(
+                'outputs/{model}/{time}'.format(
+                    model=self.training_desc.replace(
+                        " + ", "_and_").replace(" ", "_").replace("-", "_"),
+                    time=time.strftime("%Y-%m-%d/%H-%M-%S"),
+                )
+            )
             save_root_dir.mkdir(exist_ok=False, parents=True)
             
             wandb.init(
@@ -88,64 +101,39 @@ class Trainer:
             )
 
             self.ckpt_dir = save_root_dir / 'checkpoints'
-            self.media_dir = save_root_dir / 'media'
-            self.reconstructions_dir = self.media_dir / 'reconstructions'
+            self.reconstructions_dir = save_root_dir / 'reconstructed_imgs'
 
             self.ckpt_dir.mkdir(exist_ok=False, parents=False)
-            self.media_dir.mkdir(exist_ok=False, parents=False)
             self.reconstructions_dir.mkdir(exist_ok=False, parents=False)
             
         set_seed(cfg.common.seed)
 
         self.cfg = cfg
         self.start_epoch = 1
+        
         self.device = torch.device(cfg.common.device)
         self.dtype = get_dtype(cfg.training.dtype)
-        self.use_imaginary_batch = cfg.actor_critic.use_imaginary_batch
+        self.use_imagination = cfg.training.action.use_imagination
         
-        self.tokenizer = instantiate(cfg.tokenizer)
-        self.tokenizer.to(self.device)
-        self.tokenizer = torch.nn.parallel.DistributedDataParallel(self.tokenizer, device_ids=[rank])
-        self.tokenizer = torch.compile(self.tokenizer, mode="max-autotune")
-        
-        # self.world_model_40M = WorldModel(
-        #     obs_vocab_size=cfg.tokenizer.vocab_size,
-        #     act_vocab_size=ATARI_NUM_ACTIONS,
-        #     config_transformer=instantiate(cfg.world_model),
-        #     config_critic=instantiate(cfg.actor_critic),
-        #     device=self.device,
-        #     name='40M wm',
-        # )
-        # self.world_model_40M.to(self.device)
-        # self.world_model_40M = torch.nn.parallel.DistributedDataParallel(self.world_model_40M, device_ids=[rank])
-        # self.world_model_40M = torch.compile(self.world_model_40M, mode="max-autotune")
+        self.tokenizer = instantiate(cfg.tokenizer).to(self.device)
+        self.tokenizer = torch.nn.parallel.DistributedDataParallel(
+            self.tokenizer, 
+            device_ids=[local_rank]
+        )
 
-        # self.world_model_80M = WorldModel(
-        #     obs_vocab_size=cfg.tokenizer.vocab_size,
-        #     act_vocab_size=ATARI_NUM_ACTIONS,
-        #     config_transformer=instantiate(cfg2.world_model),
-        #     config_critic=instantiate(cfg2.actor_critic),
-        #     device=self.device,
-        #     name='80M wm',
-        # )
-        # self.world_model_80M.to(self.device)
-        # self.world_model_80M = torch.nn.parallel.DistributedDataParallel(self.world_model_80M, device_ids=[rank])
-        # self.world_model_80M = torch.compile(self.world_model_80M, mode="max-autotune")
-
-        self.world_model_200M = WorldModel(
+        self.world_model = WorldModel(
             obs_vocab_size=cfg.tokenizer.vocab_size,
             act_vocab_size=ATARI_NUM_ACTIONS,
-            config_transformer=instantiate(cfg.world_model),
-            config_critic=instantiate(cfg.actor_critic),
+            config_transformer=instantiate(cfg.transformer),
+            config_critic_arch=cfg.critic_head,
+            config_critic_train=cfg.training.action,
             device=self.device,
-            name='200M wm',
+            name='150M wm',
+        ).to(self.device)
+        self.world_model = torch.nn.parallel.DistributedDataParallel(
+            self.world_model, 
+            device_ids=[local_rank]
         )
-        self.world_model_200M.to(self.device)
-        self.world_model_200M = torch.nn.parallel.DistributedDataParallel(
-            self.world_model_200M, 
-            device_ids=[rank]
-        )
-        self.world_model_200M = torch.compile(self.world_model_200M, mode="max-autotune")
         
         if self.is_main_process:
             print(f'Training dtype: {self.dtype}, seed: {cfg.common.seed}')
@@ -177,7 +165,7 @@ class Trainer:
             prefetch_factor=2,
         )
         
-        if self.use_imaginary_batch:
+        if self.use_imagination:
             self.imagine_sampler = torch.utils.data.distributed.DistributedSampler(
                 self.train_dataset, 
                 seed=cfg.common.seed + 100,
@@ -202,22 +190,9 @@ class Trainer:
             self.tokenizer.parameters(), 
             lr=cfg.training.tokenizer.learning_rate,
         )
-        # self.optimizer_alpha = torch.optim.Adam([self.world_model.module.log_alpha], lr=cfg.training.world_model.alpha_lr)
         
-        # self.optimizer_world_model_40M = configure_optimizer(
-        #     self.world_model_40M, 
-        #     cfg.training.world_model.learning_rate, 
-        #     cfg.training.world_model.weight_decay, 
-        #     cfg.training.world_model.critic_lr,
-        # )
-        # self.optimizer_world_model_80M = configure_optimizer(
-        #     self.world_model_80M, 
-        #     cfg.training.world_model.learning_rate, 
-        #     cfg.training.world_model.weight_decay, 
-        #     cfg.training.world_model.critic_lr,
-        # )
-        self.optimizer_world_model_200M = configure_optimizer(
-            self.world_model_200M, 
+        self.optimizer_world_model = configure_optimizer(
+            self.world_model, 
             cfg.training.world_model.learning_rate, 
             cfg.training.world_model.weight_decay, 
             cfg.training.world_model.critic_lr,
@@ -242,18 +217,18 @@ class Trainer:
         
         dist.barrier()
     
-    # should modify: 
-    # 1. the definitions of wm and optimizer in `__init__` function
-    # 2. all_wms
-    # 3. all_wm_optimizers
+    # if train more WM at once (such as 40M, 70M, 150M), you should modify the followings: 
+    # 1. add the definitions of wm and optimizer in `__init__` function
+    # 2. all_wms function
+    # 3. all_wm_optimizers function
     # 4. the name of them in `save` function
     @property
     def all_wms(self):
-        return (self.world_model_200M,)
+        return (self.world_model,)
 
     @property
     def all_wm_optimizers(self):
-        return (self.optimizer_world_model_200M,)
+        return (self.optimizer_world_model,)
 
     def run(self) -> None:
         for epoch in range(self.start_epoch, 1 + self.cfg.common.epochs):
@@ -298,14 +273,14 @@ class Trainer:
             zip(
                 self.train_dataloader, 
                 self.imagine_dataloader
-            ) if self.use_imaginary_batch else self.train_dataloader, 
+            ) if self.use_imagination else self.train_dataloader, 
             disable=not self.is_main_process, 
             desc=f"Epoch {epoch}. Train {self.training_desc}".replace("world_model", "wm"),
             file=sys.stdout,
         ):
             intermediate_losses = defaultdict(float)
             all_wm_logs = {}
-            if self.use_imaginary_batch:
+            if self.use_imagination:
                 batch_, ima_batch_ = batch_
                 ima_batch = self._to_device(ima_batch_)
             batch = self._to_device(batch_)
@@ -345,7 +320,7 @@ class Trainer:
                 
             # train world_model
             for optimizer_world_model, world_model in zip(self.all_wm_optimizers, self.all_wms):
-                if self.use_imaginary_batch and \
+                if self.use_imagination and \
                     self.global_training_step > cfg_world_model.imagine_after_n_steps:
                     # # change random seed for augmentation / imagination
                     # cpu_rng_state, cuda_rng_state, numpy_state, python_state = get_random_state()
@@ -358,7 +333,7 @@ class Trainer:
                             horizon=self.cfg.actor_critic.planning_horizon,
                             beam_width=self.cfg.actor_critic.planning_beam_width,
                         )
-                                        
+
                     imagine_batch = self._gather_batch(imagine_batch)
                     avail_idxs = imagine_batch['envs'] != -1
                         
@@ -535,13 +510,13 @@ class Trainer:
             torch.save(self.tokenizer.state_dict(), step_ckpt_dir / f'tokenizer.pt')
             # torch.save(self.world_model_40M.state_dict(), step_ckpt_dir / f'world_model_40M.pt')
             # torch.save(self.world_model_80M.state_dict(), step_ckpt_dir / f'world_model_80M.pt')
-            torch.save(self.world_model_200M.state_dict(), step_ckpt_dir / f'world_model_200M.pt')
+            torch.save(self.world_model.state_dict(), step_ckpt_dir / f'world_model_200M.pt')
             
             if not save_agent_only:
                 torch.save(self.optimizer_tokenizer.state_dict(), step_ckpt_dir / f'optimizer_tokenizer.pt')
                 # torch.save(self.optimizer_world_model_40M.state_dict(), step_ckpt_dir / f'optimizer_world_model_40M.pt')
                 # torch.save(self.optimizer_world_model_80M.state_dict(), step_ckpt_dir / f'optimizer_world_model_80M.pt')
-                torch.save(self.optimizer_world_model_200M.state_dict(), step_ckpt_dir / f'optimizer_world_model_200M.pt')
+                torch.save(self.optimizer_world_model.state_dict(), step_ckpt_dir / f'optimizer_world_model_200M.pt')
 
     def load_checkpoint(self, path, component) -> None:
         def process_param_name(name: str) -> str:
@@ -589,7 +564,7 @@ class Trainer:
             # self.world_model_80M.load_state_dict(ckpt_world)
             
             ckpt_world = torch.load(os.path.join(path, f'{component}.pt'), map_location=self.device)
-            # world_model_dict = self.world_model_200M.state_dict()
+            # world_model_dict = self.world_model.state_dict()
             # for name, param in ckpt_world.items():
             #     if name.endswith('.indices'):
             #         continue
@@ -597,8 +572,8 @@ class Trainer:
             #         world_model_dict[name] = param[:world_model_dict[name].size()[0]]
             #     else:
             #         world_model_dict[name] = param
-            # self.world_model_200M.load_state_dict(world_model_dict)
-            self.world_model_200M.load_state_dict(ckpt_world)
+            # self.world_model.load_state_dict(world_model_dict)
+            self.world_model.load_state_dict(ckpt_world)
 
             if self.cfg.initialization.load_optimizer_world_model:
                 # ckpt_opt_wm = torch.load(os.path.join(path, 'optimizer_world_model_40M.pt'), map_location=self.device)
@@ -616,7 +591,7 @@ class Trainer:
                 ckpt_opt_wm = torch.load(os.path.join(path, 'optimizer_world_model_200M.pt'), map_location=self.device)
                 # ckpt_opt_wm['state'][86]['exp_avg'] = ckpt_opt_wm['state'][86]['exp_avg'][:296]
                 # ckpt_opt_wm['state'][86]['exp_avg_sq'] = ckpt_opt_wm['state'][86]['exp_avg_sq'][:296]
-                self.optimizer_world_model_200M.load_state_dict(ckpt_opt_wm)
+                self.optimizer_world_model.load_state_dict(ckpt_opt_wm)
             
             if self.cfg.initialization.load_start_epoch:
                 raise NotImplementedError

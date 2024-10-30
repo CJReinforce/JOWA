@@ -1,18 +1,24 @@
 import sys
 from copy import deepcopy
 from dataclasses import dataclass
-from typing import Any, Optional, Tuple, Union
+from typing import Any, Dict, Optional, Tuple
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 from tqdm import tqdm
 
-from utils import Batch
 from envs.world_model_env import WorldModelEnv, action_masks
-from utils import Ensemble, LossWithIntermediateLosses, ZeroEmbedding, init_weights, mlp
+from utils import (
+    Batch,
+    Ensemble,
+    LossWithIntermediateLosses,
+    StepNode,
+    ZeroEmbedding,
+    init_transformer_weights,
+    mlp,
+)
 
 from .kv_caching import KeysValues, concate_kv, split_kv
 from .slicer import Embedder, Head
@@ -30,22 +36,21 @@ class WorldModelOutput:
     logits_q_target: torch.FloatTensor
 
 
-@dataclass
-class ImagineOutput:
-    observations: torch.ByteTensor
-    actions: torch.LongTensor
-    rewards: torch.FloatTensor
-    ends: torch.BoolTensor
-    mask_padding: torch.BoolTensor
-    envs: torch.LongTensor
-
-
 class WorldModel(nn.Module):
-    def __init__(self, obs_vocab_size: int, act_vocab_size: int, config_transformer: TransformerConfig, config_critic, device = "cuda", name: str = 'world_model') -> None:
+    def __init__(
+        self, 
+        obs_vocab_size: int, 
+        act_vocab_size: int, 
+        config_transformer: TransformerConfig, 
+        config_critic_arch,
+        config_critic_train, 
+        device = "cuda", 
+        name: str = 'world_model',
+    ) -> None:
         super().__init__()
         self.obs_vocab_size, self.act_vocab_size = obs_vocab_size, act_vocab_size
         self.config_transformer = config_transformer
-        self.config_critic = config_critic
+        self.config_critic_train = config_critic_train
         self.transformer = Transformer(config_transformer)
 
         all_but_last_obs_tokens_pattern = torch.ones(config_transformer.tokens_per_block)
@@ -56,30 +61,39 @@ class WorldModel(nn.Module):
         obs_tokens_pattern = 1 - act_tokens_pattern
 
         self.pos_emb = nn.Embedding(config_transformer.max_tokens, config_transformer.embed_dim)
-        # self.task_emb = nn.Embedding(config_transformer.max_tasks, config_transformer.embed_dim)
-        if config_critic.use_task_embed:
+
+        if config_critic_train.use_task_embed:
             self.task_emb = Embedder(
                 max_blocks=config_transformer.max_blocks,
                 block_masks=[act_tokens_pattern, obs_tokens_pattern],
                 embedding_tables=nn.ModuleList(
-                    [nn.Embedding(config_transformer.max_tasks, config_transformer.embed_dim),  # ZeroEmbedding(1, config_transformer.embed_dim),
-                    nn.Embedding(config_transformer.max_tasks, config_transformer.embed_dim)])
+                    [
+                        nn.Embedding(config_transformer.max_tasks, config_transformer.embed_dim),
+                        nn.Embedding(config_transformer.max_tasks, config_transformer.embed_dim)
+                    ]
+                )
             )
         else:
             self.task_emb = Embedder(
                 max_blocks=config_transformer.max_blocks,
                 block_masks=[act_tokens_pattern, obs_tokens_pattern],
                 embedding_tables=nn.ModuleList(
-                    [ZeroEmbedding(config_transformer.max_tasks, config_transformer.embed_dim),  # ZeroEmbedding(1, config_transformer.embed_dim),
-                    ZeroEmbedding(config_transformer.max_tasks, config_transformer.embed_dim)])
+                    [
+                        ZeroEmbedding(config_transformer.max_tasks, config_transformer.embed_dim),
+                        ZeroEmbedding(config_transformer.max_tasks, config_transformer.embed_dim)
+                    ]
+                )
             )
 
         self.embedder = Embedder(
             max_blocks=config_transformer.max_blocks,
             block_masks=[act_tokens_pattern, obs_tokens_pattern],
             embedding_tables=nn.ModuleList(
-                [nn.Embedding(act_vocab_size, config_transformer.embed_dim), 
-                 nn.Embedding(obs_vocab_size, config_transformer.embed_dim)])
+                [
+                    nn.Embedding(act_vocab_size, config_transformer.embed_dim), 
+                    nn.Embedding(obs_vocab_size, config_transformer.embed_dim)
+                ]
+            )
         )
 
         self.head_observations = Head(
@@ -112,38 +126,41 @@ class WorldModel(nn.Module):
             )
         )
         
-        self.q_penalty_method = self.config_critic.q_penalty
-        self.td_loss_method = self.config_critic.td_loss
-        self.q_loss_backwards_wm = self.config_critic.q_loss_backwards_wm
+        self.q_penalty_method = config_critic_train.q_penalty
+        self.td_loss_method = config_critic_train.td_loss
+        self.q_loss_backwards_wm = bool(config_critic_train.q_loss_backwards_wm)
         assert self.q_penalty_method in ['cql', 'combo', None]
         assert self.td_loss_method in ['c51', 'mse']
 
-        q_output_dim = act_vocab_size * config_critic.num_atoms if self.td_loss_method == 'c51' else act_vocab_size
+        q_output_dim = act_vocab_size * config_critic_train.num_atoms if \
+            self.td_loss_method == 'c51' else act_vocab_size
         self.head_q = Head(
             max_blocks=config_transformer.max_blocks,
             block_mask=last_obs_tokens_pattern,
             head_module=Ensemble([
                 mlp(
-                    config_critic.latent_dim, 
-                    2*[config_critic.mlp_dim], 
+                    config_transformer.embed_dim, 
+                    [config_critic_arch.mlp_dim] * 2, 
                     q_output_dim, 
-                    dropout=config_critic.dropout
-                ) for _ in range(config_critic.num_q)
+                    dropout=config_critic_arch.dropout
+                ) for _ in range(config_critic_arch.num_q)
             ])
         )
         
-        self.apply(init_weights)
+        self.apply(init_transformer_weights)
         self.head_q_target = deepcopy(self.head_q).requires_grad_(False)
         
         # cql weight
         self.log_alpha = torch.tensor(
-            np.log(self.config_critic.cql_weight),
-            dtype=torch.float, device=device, # requires_grad=True,
-        )
+            config_critic_train.cql_weight,
+            dtype=torch.float32, device=device,
+        ).log()
 
         if self.td_loss_method == 'c51':
             self.atoms_support = torch.linspace(
-                config_critic.vmin, config_critic.vmax, config_critic.num_atoms,
+                config_critic_train.vmin, 
+                config_critic_train.vmax, 
+                config_critic_train.num_atoms,
             ).to(device)
         
         self.training_steps = 0
@@ -156,22 +173,19 @@ class WorldModel(nn.Module):
         super().train(mode)
         self.head_q_target.train(False)
         return self
-        
-    def soft_update_target_Q(self):
-        """
-        Soft-update target Q-networks using Polyak averaging.
-        """
+    
+    def _hard_update(self):
         with torch.no_grad():
-            for p, p_target in zip(self.head_q.parameters(), self.head_q_target.parameters()):
-                p_target.data.lerp_(p.data, self.config_critic.tau)
-                
-    def hard_update_target_Q(self):
+            self.head_q_target.load_state_dict(self.head_q.state_dict())
+          
+    def hard_update_target_Q(self, wo_check=False):
         """
         Hard-update target Q-networks.
         """
-        if self.training_steps % self.config_critic.target_update_frequency == 0:
-            with torch.no_grad():
-                self.head_q_target.load_state_dict(self.head_q.state_dict())
+        if wo_check:
+            self._hard_update()
+        elif self.training_steps % self.config_critic_train.target_update_frequency == 0:
+            self._hard_update()
 
     def get_valid_alpha(self):
         return self.log_alpha.exp().clamp(min=0.0)
@@ -179,14 +193,19 @@ class WorldModel(nn.Module):
     def __repr__(self) -> str:
         return self.wm_name
 
-    def forward(self, tokens: torch.LongTensor, tasks: torch.LongTensor, past_keys_values: Optional[KeysValues] = None) -> WorldModelOutput:
-
-        assert tasks.size(0) == tokens.size(0)  # B == B
+    def forward(
+        self, 
+        tokens: torch.LongTensor, 
+        tasks: torch.LongTensor, 
+        past_keys_values: Optional[KeysValues] = None
+    ) -> WorldModelOutput:
         num_steps = tokens.size(1)  # (B, T)
+        assert tasks.size(0) == tokens.size(0)  # B == B
         assert num_steps <= self.config_transformer.max_tokens
-        if past_keys_values is not None and past_keys_values.size + num_steps > past_keys_values[0]._k_cache._cache.shape[2]:
-            # past_keys_values.shift(shifted_tokens=num_steps + 1)
-            raise IndexError("Past keys and values are too short to accomodate the current tokens.")
+        
+        if past_keys_values is not None and \
+            past_keys_values.size + num_steps > past_keys_values[0]._k_cache._cache.shape[2]:
+            raise IndexError("Past keys_values are too short to accomodate the current tokens.")
         prev_steps = 0 if past_keys_values is None else past_keys_values.size
 
         sequences = self.embedder(tokens, num_steps, prev_steps) + \
@@ -198,13 +217,36 @@ class WorldModel(nn.Module):
         logits_observations = self.head_observations(x, num_steps=num_steps, prev_steps=prev_steps)
         logits_rewards = self.head_rewards(x, num_steps=num_steps, prev_steps=prev_steps)  # (B, L, 3)
         logits_ends = self.head_ends(x, num_steps=num_steps, prev_steps=prev_steps)  # (B, L, 2)
-        logits_q = self.head_q(x if self.q_loss_backwards_wm else x.detach(), num_steps=num_steps, prev_steps=prev_steps)  # (num_q, B, L, #actions)
+        logits_q = self.head_q(
+            x if self.q_loss_backwards_wm else x.detach(), 
+            num_steps=num_steps, 
+            prev_steps=prev_steps,
+        )  # (num_q, B, L, #actions)
         with torch.no_grad():
-            logits_q_target = self.head_q_target(x.detach(), num_steps=num_steps, prev_steps=prev_steps)  # (num_q, B, L, #actions)
+            logits_q_target = self.head_q_target(
+                x.detach(), 
+                num_steps=num_steps, 
+                prev_steps=prev_steps,
+            )  # (num_q, B, L, #actions)
 
-        return WorldModelOutput(x, logits_observations, logits_rewards, logits_ends, logits_q, logits_q_target)
+        return WorldModelOutput(
+            x, 
+            logits_observations, 
+            logits_rewards, 
+            logits_ends, 
+            logits_q, 
+            logits_q_target,
+        )
 
-    def compute_loss(self, real_batch: Batch, tokenizer: Tokenizer, train_critic: bool = False, imagine_horizon: Optional[int] = None, training: bool = True, imagine_batch: Optional[Batch] = None, **kwargs: Any) -> Tuple[LossWithIntermediateLosses, dict]:
+    def compute_loss(
+        self, 
+        real_batch: Batch, 
+        tokenizer: Tokenizer, 
+        train_critic: bool = False, 
+        training: bool = True, 
+        imagine_batch: Optional[Batch] = None, 
+        **kwargs: Any,
+    ) -> Tuple[LossWithIntermediateLosses, dict]:
 
         real_batch_size = real_batch['observations'].size(0)
         info_logs = {
@@ -213,24 +255,6 @@ class WorldModel(nn.Module):
             f'info/{str(self)}/alpha': self.log_alpha.exp().item(),
         }
         additional_losses = {}
-
-        # if train_critic and self.config_critic.use_imaginary_batch:
-        #     # imagine
-        #     imagine_batch, env_logs = self.imagine(real_batch if image_batch is None else image_batch, tokenizer, horizon=imagine_horizon)
-        #     ## check batch size
-        #     # imagine_batch_size = imagine_batch.observations.size(0)
-        #     # assert real_batch_size == imagine_batch_size
-            
-        #     # mix real and imagine batch
-        #     mix_batch = {k: torch.cat([real_batch[k], getattr(imagine_batch, k)], dim=0) for k in real_batch.keys()}
-
-        #     info_logs.update({
-        #         f'info/{str(self)}/reward_imagine': imagine_batch.rewards.mean().item(),
-        #         f'info/{str(self)}/done_imagine': imagine_batch.ends.float().mean().item(),
-        #         f'info/{str(self)}/epsilon': env_logs['epsilon'],
-        #         f'info/{str(self)}/num_given_block': env_logs['num_given_block'],
-        #     })
-        # else:
 
         if imagine_batch is not None:
             mix_batch = {k: v if k=='observations' else torch.cat((v, imagine_batch[k]), dim=0) for k, v in real_batch.items()}
@@ -249,7 +273,9 @@ class WorldModel(nn.Module):
         # RL loss for head_q (and wm)
         if train_critic:
             # REM
-            alpha = torch.rand(self.config_critic.num_q).to(tokens.device) if self.config_critic.use_rem else torch.ones(self.config_critic.num_q).to(tokens.device)
+            alpha = torch.rand(self.config_critic_arch.num_q).to(tokens.device) if \
+                self.config_critic_train.use_rem else \
+                    torch.ones(self.config_critic_arch.num_q).to(tokens.device)
             alpha = alpha / torch.sum(alpha)
 
             # C51
@@ -314,7 +340,7 @@ class WorldModel(nn.Module):
                     ) * 1.0 / num_dims  # (num_end, atoms)
                     mixed_q_next_s_argmax_a_dist = torch.cat((masked_q_next_s_argmax_a_dist, ended_q_next_s_argmax_a_dist), dim=0)  # (Bt + num_end, atoms)
 
-                    target_support = mix_batch['rewards'][compute_q_mask].unsqueeze(-1) + self.config_critic.gamma * self.atoms_support.unsqueeze(0)  # (Bt, atoms)
+                    target_support = mix_batch['rewards'][compute_q_mask].unsqueeze(-1) + self.config_critic_train.gamma * self.atoms_support.unsqueeze(0)  # (Bt, atoms)
                     target_support_for_end = mix_batch['rewards'][ends].unsqueeze(-1) + 0.0 * self.atoms_support.unsqueeze(0)
                     mixed_target_support = torch.cat((target_support, target_support_for_end), dim=0)  # (Bt + num_end, atoms)
                     
@@ -355,7 +381,7 @@ class WorldModel(nn.Module):
             # MSE
             else:
                 ensemble_q = outputs.logits_q.gather(
-                    -1, act_tokens.expand(self.config_critic.num_q, *act_tokens.shape)).squeeze(-1)  # (num_q, B, L)
+                    -1, act_tokens.expand(self.config_critic_arch.num_q, *act_tokens.shape)).squeeze(-1)  # (num_q, B, L)
                 q = torch.sum(alpha.unsqueeze(-1).unsqueeze(-1) * ensemble_q, dim=0)  # (B, L)
                 
                 # compute mask for not done state
@@ -391,7 +417,7 @@ class WorldModel(nn.Module):
                     compute_q_target_mask[batch_indices, first_ones] = 0
                     
                     target_v = target_v[compute_q_target_mask]
-                    target_q = mix_batch['rewards'][compute_q_mask] + self.config_critic.gamma * target_v  # (Bt,)
+                    target_q = mix_batch['rewards'][compute_q_mask] + self.config_critic_train.gamma * target_v  # (Bt,)
                     
                     target_q_for_done = mix_batch['rewards'][ends]  # (num_end,)
                     mixed_target_q = torch.cat((target_q, target_q_for_done), dim=0)  # (Bt + num_end,)
@@ -428,7 +454,7 @@ class WorldModel(nn.Module):
             obs_tokens[:real_batch_size], real_batch['rewards'], real_batch['ends'], real_batch['mask_padding'])
         logits_observations = rearrange(outputs.logits_observations[:real_batch_size, :-1], 'b t o -> (b t) o')
         
-        supervised_weight = self.config_critic.supervised_weight if train_critic else 1.0
+        supervised_weight = self.config_critic_train.supervised_weight if train_critic else 1.0
         loss_obs = F.cross_entropy(logits_observations, labels_observations) * supervised_weight
         loss_rewards = F.cross_entropy(rearrange(
             outputs.logits_rewards[:real_batch_size], 'b t e -> (b t) e'), labels_rewards) * supervised_weight
@@ -445,25 +471,37 @@ class WorldModel(nn.Module):
             **additional_losses,
         ), info_logs
 
-    def compute_labels_world_model(self, obs_tokens: torch.Tensor, rewards: torch.Tensor, ends: torch.Tensor, mask_padding: torch.BoolTensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    def compute_labels_world_model(
+        self, 
+        obs_tokens: torch.Tensor, 
+        rewards: torch.Tensor, 
+        ends: torch.Tensor, 
+        mask_padding: torch.BoolTensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         assert torch.all(ends.sum(dim=1) <= 1)  # at most 1 done
         mask_fill = torch.logical_not(mask_padding)
-        labels_observations = rearrange(obs_tokens.masked_fill(mask_fill.unsqueeze(-1).expand_as(obs_tokens), -100), 'b t k -> b (t k)')[:, 1:]
+        labels_observations = rearrange(
+            obs_tokens.masked_fill(mask_fill.unsqueeze(-1).expand_as(obs_tokens), -100), 
+            'b t k -> b (t k)'
+        )[:, 1:]
         labels_rewards = (rewards.sign() + 1).masked_fill(mask_fill, -100).long()  # Rewards clipped to {-1, 0, 1}
         labels_ends = ends.masked_fill(mask_fill, -100)
         return labels_observations.reshape(-1), labels_rewards.reshape(-1), labels_ends.reshape(-1)
     
     @torch.no_grad()
-    def imagine(self, batch: Batch, tokenizer: Tokenizer, horizon=None, beam_width=None, show_pbar: bool = False) -> Tuple[ImagineOutput, dict]:
-        # # choose the num_given_block from 4 to 1
-        # for num_given_block in range(10, 0, -1):
-        #     if batch['mask_padding'][:, -num_given_block:].all():
-        #         break
-        policy_in_imagination = self.config_critic.policy_in_imagination
-        assert policy_in_imagination in ['greedy', 'epsilon_greedy', 'planning']
+    def imagine(
+        self, 
+        batch: Batch, 
+        tokenizer: Tokenizer, 
+        horizon=None, 
+        beam_width=None, 
+        show_pbar: bool = False
+    ) -> Tuple[Dict, Dict]:
+        policy_in_imagination = self.config_critic_train.policy_in_imagination
+        assert policy_in_imagination in ['epsilon_greedy', 'planning']
         
-        num_given_block = 8
-        avail_idxs = batch['mask_padding'][:, -num_given_block:].all(1)
+        max_blocks = self.config_transformer.max_blocks
+        avail_idxs = batch['mask_padding'][:, -max_blocks:].all(1)
         avail_batch = {k: v[avail_idxs] for k, v in batch.items()}
         device = avail_batch['observations'].device
         
@@ -471,12 +509,12 @@ class WorldModel(nn.Module):
             constrained_beam_width = beam_width
             assert beam_width is not None and horizon is not None
             
-            obs_tokens = tokenizer.encode(avail_batch['observations'][:, -num_given_block + horizon:], should_preprocess=True).tokens  # (B, L, K)
-            act_tokens = rearrange(avail_batch['actions'][:, -num_given_block + horizon:], 'b l -> b l 1')
+            obs_tokens = tokenizer.encode(avail_batch['observations'][:, -max_blocks + horizon:], should_preprocess=True).tokens  # (B, L, K)
+            act_tokens = rearrange(avail_batch['actions'][:, -max_blocks + horizon:], 'b l -> b l 1')
             tokens = rearrange(torch.cat((obs_tokens, act_tokens), dim=2), 'b l k1 -> b (l k1)')[:, :-1]  # (B, L(K+1))
 
             wm_env = WorldModelEnv(tokenizer, self, device, avail_batch['envs'])
-            gamma = self.config_critic.gamma
+            gamma = self.config_critic_train.gamma
             _ = wm_env.reset_from_initial_observations(tokens, act_mode="logits")
             
             critic = wm_env.last_actions
@@ -600,7 +638,7 @@ class WorldModel(nn.Module):
             imagine_batch['actions'] = torch.cat((
                 torch.cat(
                     (
-                        avail_batch['actions'][:, -num_given_block + horizon + 1:], 
+                        avail_batch['actions'][:, -max_blocks + horizon + 1:], 
                         imagine_batch_act.to(device),
                     ), 
                     dim=1,
@@ -616,7 +654,7 @@ class WorldModel(nn.Module):
             imagine_batch['rewards'] = torch.cat((
                 torch.cat(
                     (
-                        avail_batch['rewards'][:, -num_given_block + horizon + 1:], 
+                        avail_batch['rewards'][:, -max_blocks + horizon + 1:], 
                         imagine_batch_rew.to(device),
                     ), 
                     dim=1,
@@ -648,21 +686,18 @@ class WorldModel(nn.Module):
                 dtype=torch.bool, 
                 device=device,
             )
-            mask[:, num_given_block - horizon:] = False
+            mask[:, max_blocks - horizon:] = False
             imagine_batch['mask_padding'] = mask
 
             return imagine_batch, {'synthetic amount': avail_idxs.sum().item()}
             
         else:
-            if num_given_block == 1:
-                initial_batch = avail_batch['observations'][:, -1]
-            else:
-                initial_batch = {
-                    'observations': avail_batch['observations'][:, -num_given_block:],
-                    'actions': avail_batch['actions'][:, -num_given_block:-1],
-                    'rewards': avail_batch['rewards'][:, -num_given_block:-1],
-                    'ends': avail_batch['ends'][:, -num_given_block:-1]
-                }
+            initial_batch = {
+                'observations': avail_batch['observations'][:, -max_blocks + horizon:],
+                'actions': avail_batch['actions'][:, -max_blocks + horizon:-1],
+                'rewards': avail_batch['rewards'][:, -max_blocks + horizon:-1],
+                'ends': avail_batch['ends'][:, -max_blocks + horizon:-1]
+            }
 
             wm_env = WorldModelEnv(tokenizer, self, device, avail_batch['envs'])
             
@@ -674,19 +709,24 @@ class WorldModel(nn.Module):
             _ = wm_env.reset_from_initial_observations(initial_batch)
             
             # record initial given block
-            if num_given_block == 1:
+            if max_blocks == 1:
                 all_observations.append(initial_batch)
             else:
-                for k in range(num_given_block):
+                for k in range(max_blocks):
                     all_observations.append(initial_batch['observations'][:, k])
-                    if k != num_given_block - 1:
+                    if k != max_blocks - 1:
                         all_actions.append(initial_batch['actions'][:, k].cpu().reshape(-1, 1))
                         all_rewards.append(initial_batch['rewards'][:, k].cpu().reshape(-1, 1))
                         all_ends.append(initial_batch['ends'][:, k].cpu().reshape(-1, 1))
             # imagine
-            for k in tqdm(range(horizon - num_given_block + 1), disable=not show_pbar, desc='Imagination', file=sys.stdout):
+            for k in tqdm(
+                range(horizon - max_blocks + 1), 
+                disable=not show_pbar, 
+                desc='Imagination', 
+                file=sys.stdout
+            ):
                 all_actions.append(wm_env.last_actions.reshape(-1, 1))
-                obs, reward, done, _ = wm_env.step(should_predict_next_obs=(k < horizon - num_given_block))
+                obs, reward, done, _ = wm_env.step(should_predict_next_obs=(k < horizon - max_blocks))
                 all_rewards.append(torch.tensor(reward).reshape(-1, 1))
                 all_ends.append(torch.tensor(done).reshape(-1, 1))
                 if obs is not None:
@@ -704,53 +744,13 @@ class WorldModel(nn.Module):
                 indices_matrix = torch.arange(T).expand(have_True_rows.int().sum(), T)
                 mask_padding_[have_True_rows] = indices_matrix <= first_one_indices.unsqueeze(1)
             
-            wm_env_logs = {'epsilon': wm_env.epsilon, 'num_given_block': num_given_block}
+            wm_env_logs = {'epsilon': wm_env.epsilon, 'synthetic amount': avail_idxs.sum().item()}
             
-            return ImagineOutput(
+            return dict(
                 observations=torch.stack(all_observations, dim=1).to(torch.float32),
                 actions=torch.cat(all_actions, dim=1).to(device),
                 rewards=torch.cat(all_rewards, dim=1).to(device),
                 ends=ends.to(device, dtype=torch.long),
                 mask_padding=mask_padding_.to(device),
-                envs=avail_batch['envs']
+                envs=avail_batch['envs'],
             ), wm_env_logs
-            
-
-class StepNode:
-    def __init__(
-        self, 
-        r: float, 
-        v_star: float, 
-        gamma: float, 
-        batch_idx: int,
-        action=None, 
-        kv_cache=None, 
-        prev: Optional['StepNode'] = None, 
-        critic: Optional[torch.Tensor] = None,
-        obs: Optional[torch.Tensor] = None,
-    ) -> None:
-        self.batch_idx = batch_idx
-        self.r = r
-        self.v_star = v_star
-        self.action = action
-        self.kv_cache = kv_cache
-        self.prev = prev
-        self.critic = critic
-        self.obs = obs
-
-        prev_gamma = 1./gamma if self.prev is None else self.prev.gamma
-        self.gamma = prev_gamma * gamma
-    
-    @property
-    def step(self) -> int:
-        return 0 if self.prev is None else self.prev.step + 1
-
-    @property
-    def sum_r(self) -> float:
-        prev_sum_r = 0. if self.prev is None else self.prev.sum_r
-        prev_gamma = 1. if self.prev is None else self.prev.gamma
-        return prev_sum_r + prev_gamma * self.r
-
-    @property
-    def score(self) -> float:
-        return self.sum_r + self.gamma * self.v_star

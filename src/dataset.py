@@ -1,12 +1,13 @@
 import os
+import pickle
 
 import numpy as np
 import pandas as pd
-import pickle
 import torch
 from torch.utils.data import Dataset
 
 from action_tokenizer import batch_tokenize_envs, tokenize_actions
+from utils import capitalize_game_name
 
 
 class AtariTrajectory(Dataset):
@@ -20,7 +21,7 @@ class AtariTrajectory(Dataset):
     ):
         envs = list(
             map(
-                lambda env: capitalize_game_name(env) if env[0].islower() else env, 
+                lambda env: capitalize_game_name(env), 
                 envs
             )
         )
@@ -41,7 +42,7 @@ class AtariTrajectory(Dataset):
     def __getitem__(self, idx):
         index_in_env, start, stop, env = self.segment_indices.iloc[idx]
 
-        env = capitalize_game_name(env) if env[0].islower() else env
+        env = capitalize_game_name(env)
         trajectory = self.traj_data[env][str(index_in_env)]
 
         episode_terminal = trajectory['terminals'][:]
@@ -51,8 +52,13 @@ class AtariTrajectory(Dataset):
         padding_length_left = max(0, -start)
         
         def pad(x):
-            pad_right = torch.nn.functional.pad(x, [0 for _ in range(2 * x.ndim - 1)] + [padding_length_right]) if padding_length_right > 0 else x
-            return torch.nn.functional.pad(pad_right, [0 for _ in range(2 * x.ndim - 2)] + [padding_length_left, 0]) if padding_length_left > 0 else pad_right
+            pad_right = torch.nn.functional.pad(
+                x, [0 for _ in range(2 * x.ndim - 1)] + [padding_length_right]
+            ) if padding_length_right > 0 else x
+            
+            return torch.nn.functional.pad(
+                pad_right, [0 for _ in range(2 * x.ndim - 2)] + [padding_length_left, 0]
+            ) if padding_length_left > 0 else pad_right
 
         start = max(0, start)
         stop = min(episode_length, stop)
@@ -99,8 +105,9 @@ def collate_fn(batch_samples):
 
 
 if __name__ == "__main__":
-    import h5py
     from time import time
+
+    import h5py
     from tqdm import tqdm
 
     dataset = AtariTrajectory(
