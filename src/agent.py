@@ -165,7 +165,7 @@ class Agent(nn.Module):
         wm_env = WorldModelEnv(self.tokenizer, self.world_model, self.device, self.env_token)
         valid_actions = self.action_mask.sum().cpu().item()
         constrained_beam_width = min(valid_actions, self.beam_width)
-        gamma = self.world_model.config_critic.gamma
+        gamma = self.world_model.config_critic_train.gamma
         max_length = self.world_model.config_transformer.max_blocks
         assert (self.used_token_idx + 1) % self.world_model.config_transformer.tokens_per_block == 0
 

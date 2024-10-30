@@ -49,9 +49,9 @@ class WorldModelEnv:
         return self._num_observations_tokens
     
     def get_epsilon(self):
-        initial_epsilon = self.world_model.config_critic.initial_epsilon
-        final_epsilon = self.world_model.config_critic.final_epsilon
-        final_training_steps = self.world_model.config_critic.final_training_steps
+        initial_epsilon = self.world_model.config_critic_train.initial_epsilon
+        final_epsilon = self.world_model.config_critic_train.final_epsilon
+        final_training_steps = self.world_model.config_critic_train.final_training_steps
         return max(final_epsilon, initial_epsilon - (initial_epsilon - final_epsilon) * self.world_model.training_steps / final_training_steps)
     
     @torch.no_grad()
