@@ -10,17 +10,29 @@ from action_tokenizer import batch_tokenize_envs, tokenize_actions
 
 
 class AtariTrajectory(Dataset):
-    def __init__(self, data_path, csv_path, sequence_length=8, envs=None):
-        self.traj_data = h5py.File(data_path, 'r')
+    def __init__(
+        self, 
+        data_dir, 
+        csv_dir, 
+        envs, 
+        csv_suffix="_right_padding", 
+        sequence_length=8
+    ):
+        envs = list(
+            map(
+                lambda env: capitalize_game_name(env) if env[0].islower() else env, 
+                envs
+            )
+        )
+
+        self.traj_data = {
+            env: h5py.File(os.path.join(data_dir, env + '.h5'), 'r') for env in envs
+        }
         
-        df = pd.read_csv(csv_path)
-        # envs: [Assault, Atlantis, ...]
-        if envs is not None:
-            df = df[df['Environment'].isin(envs)].reset_index(drop=True)
-        self.segment_indices = df
+        df = [pd.read_csv(os.path.join(csv_dir, f'{env}{csv_suffix}.csv')) for env in envs]
+        self.segment_indices = pd.concat(df, ignore_index=True)
         
         self.sequence_length = sequence_length
-        self.transform = ToTensor()
     
     def __len__(self):
         return len(self.segment_indices)
@@ -32,7 +44,7 @@ class AtariTrajectory(Dataset):
         env = capitalize_game_name(env) if env[0].islower() else env
         trajectory = self.traj_data[env][str(index_in_env)]
 
-        episode_terminal = trajectory['terminal'][:]
+        episode_terminal = trajectory['terminals'][:]
         episode_length = episode_terminal.shape[0]
         
         padding_length_right = max(0, stop - episode_length)
@@ -45,20 +57,30 @@ class AtariTrajectory(Dataset):
         start = max(0, start)
         stop = min(episode_length, stop)
         
-        observations = trajectory['observation'][start:stop]
-        actions = trajectory['action'][start:stop]
-        rewards = trajectory['reward'][start:stop]
+        observations = trajectory['observations'][start:stop]
+        actions = trajectory['actions'][start:stop]
+        rewards = trajectory['rewards'][start:stop]
         ends = np.clip(episode_terminal[start:stop], 0, 1)
         
         return {
-            'observations': pad(torch.from_numpy(observations).to(torch.float32).unsqueeze(1)/255.0),  # (L, 1, 84, 84), dtype: float32
-            'actions': pad(torch.from_numpy(tokenize_actions(env, actions)).to(torch.long)),  # (L,), dtype: long
-            'rewards': pad(torch.from_numpy(rewards).to(torch.float32)),  # (L,), dtype: float32
-            'ends': pad(torch.from_numpy(ends).to(torch.long)),  # (L,), dtype: long
+            'observations': pad(
+                torch.from_numpy(observations).to(torch.float32).unsqueeze(1)/255.0
+            ),  # (L, 1, 84, 84), dtype: float32
+            'actions': pad(
+                torch.from_numpy(tokenize_actions(env, actions)).to(torch.long)
+            ),  # (L,), dtype: long
+            'rewards': pad(
+                torch.from_numpy(rewards).to(torch.float32)
+            ),  # (L,), dtype: float32
+            'ends': pad(
+                torch.from_numpy(ends).to(torch.long)
+            ),  # (L,), dtype: long
             'mask_padding': torch.cat(
-                (torch.zeros(padding_length_left, dtype=torch.bool), 
-                torch.ones(ends.shape[0], dtype=torch.bool), 
-                torch.zeros(padding_length_right, dtype=torch.bool)), 
+                (
+                    torch.zeros(padding_length_left, dtype=torch.bool), 
+                    torch.ones(ends.shape[0], dtype=torch.bool), 
+                    torch.zeros(padding_length_right, dtype=torch.bool)
+                ), 
                 dim=0
             ),  # (L,), dtype: bool
             'envs': env,  # str --collate_fn--> (B,), dtype: long
@@ -82,8 +104,9 @@ if __name__ == "__main__":
     from tqdm import tqdm
 
     dataset = AtariTrajectory(
-        'dataset/downsampled/trajectory/data/traj.h5', 
-        'dataset/downsampled/segment/csv/15_training_games_segments_left_padding.csv',
+        'dataset/downsampled/trajectory/data', 
+        'dataset/downsampled/segment/csv',
+        envs=['Assault', 'BeamRider']
     )
     
     h5_time = []
@@ -93,5 +116,14 @@ if __name__ == "__main__":
         data = dataset.__getitem__(idx)
         end_time = time()
         h5_time.append(end_time - start_time)
+
+        if idx == 0:
+            for key, value in data.items():
+                if isinstance(value, torch.Tensor):
+                    print(
+                        f"Key: {key}, Value shape: {value.shape}, Value Dtype: {value.dtype}"
+                    )
+                else:
+                    print(f"Key: {key}, Value Type: {type(value)}")
     
     print("hdf5 load time:", sum(h5_time))
