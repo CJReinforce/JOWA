@@ -36,7 +36,7 @@ action:
   vmax: 30
   num_atoms: 51
   td_loss: c51  # in [c51, mse]
-  # some hyperparameters necessary to ensure eval
+  # some hyperparameters necessary for running eval
   gamma: 0.99
   cql_weight: 0.1
   q_penalty: cql
