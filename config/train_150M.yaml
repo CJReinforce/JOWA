@@ -97,16 +97,16 @@ training:
     final_training_steps: 20000
 
 evaluation:
-  should: False
-  every: 1
-  world_model:
-    save_reconstructions: True  # True  # False
-    critic_eval_step_frequency: 10e10  # ${training.action.target_update_frequency}  # 1000
-    critic_eval_epoch_frequency: 3
+  should: True
+  world:
+    save_reconstructions: True
+  action:
+    step_frequency: 125000
+    epoch_frequency: 1
   env:
-    env_name: Pong  # SpaceInvaders  # Carnival
-    num_eval_episodes: 1
-    num_given_steps: 8
+    env_name: DemonAttack  # single env eval during training
+    num_eval_episodes: 1  # per rank
+    num_given_steps: 2
     max_time: 180  # seconds
     fps: 15
     header: False  # verbose info

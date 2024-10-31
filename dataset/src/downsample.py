@@ -75,7 +75,7 @@ def main(
     seg_csv_path,
     env_index,
 ):
-    set_seed(0)
+    set_seed(env_index)
 
     # index of downsampled trajectories
     sample_episodes_this_env = sorted(np.random.randint(
