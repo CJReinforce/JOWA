@@ -33,7 +33,10 @@ class AgentEnv:
 
     def _to_tensor(self, obs: np.ndarray):
         assert isinstance(obs, np.ndarray) and obs.dtype == np.uint8
-        return rearrange(torch.FloatTensor(obs).div(255), 'n h w c -> n c h w').to(self.agent.device)
+        return rearrange(
+            torch.FloatTensor(obs).div(255), 
+            'n h w c -> n c h w',
+        ).to(self.agent.device)
 
     def _to_array(self, obs: torch.FloatTensor):
         assert obs.ndim == 4 and obs.size(0) == 1
@@ -53,6 +56,7 @@ class AgentEnv:
         with torch.no_grad():
             act_tensor = self.agent.act(self.obs)
             act = act_tensor.cpu().numpy()
+        
         obs, reward, done, _ = self.env.step(act)
         self.obs = self._to_tensor(obs) if isinstance(self.env, SingleProcessEnv) else obs
         self.agent.update_memory(act_tensor)
@@ -72,14 +76,21 @@ class AgentEnv:
 
     def render(self) -> Image.Image:
         assert self.obs.size() == (1, 1, 84, 84)
-        original_obs = self.env.env._env._pool_and_resize() if isinstance(self.env, SingleProcessEnv) else self._to_array(self.obs)
+        original_obs = self.env.env._env._pool_and_resize() if \
+            isinstance(self.env, SingleProcessEnv) else self._to_array(self.obs)
         
         if self.do_reconstruction:
-            rec = torch.clamp(self.agent.tokenizer.encode_decode(self.obs, should_preprocess=True, should_postprocess=True), 0, 1)
-            arr = np.concatenate((original_obs[..., 0], self._to_array(rec)[..., 0]), axis=1)
-            # rec = self._to_array(resize(rec, original_obs.shape[:2], interpolation=InterpolationMode.NEAREST))
-            # resized_obs = self._to_array(resize(self.obs, original_obs.shape[:2], interpolation=InterpolationMode.NEAREST))
-            # arr = np.concatenate((original_obs, resized_obs, rec), axis=1)
+            rec = torch.clamp(
+                self.agent.tokenizer.encode_decode(
+                    self.obs, 
+                    should_preprocess=True,
+                    should_postprocess=True,
+                ), 0, 1,
+            )
+            arr = np.concatenate(
+                (original_obs[..., 0], self._to_array(rec)[..., 0]), 
+                axis=1,
+            )
         else:
             arr = original_obs[..., 0]
             

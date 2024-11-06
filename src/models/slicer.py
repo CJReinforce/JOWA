@@ -36,7 +36,12 @@ class Head(Slicer):
 
 
 class Embedder(nn.Module):
-    def __init__(self, max_blocks: int, block_masks: List[torch.Tensor], embedding_tables: List[nn.Embedding]) -> None:
+    def __init__(
+        self, 
+        max_blocks: int, 
+        block_masks: List[torch.Tensor], 
+        embedding_tables: List[nn.Embedding],
+    ) -> None:
         super().__init__()
         assert len(block_masks) == len(embedding_tables)
         assert (sum(block_masks) == 1).all()  # block mask are a partition of a block

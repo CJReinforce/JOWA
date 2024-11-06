@@ -1,6 +1,7 @@
 from typing import List
 
 import numpy as np
+import torch
 
 GAME_NAMES = [
     'AirRaid', 'Alien', 'Amidar', 'Assault', 'Asterix', 'Asteroids', 'Atlantis',
@@ -286,7 +287,9 @@ def batch_tokenize_actions(envs: List[str], actions: np.ndarray) -> np.ndarray:
     """Tokenize a batch of actions for a list of environments."""
     assert actions.ndim == 2
     assert len(envs) == actions.shape[0]
-    return np.stack([tokenize_actions(env, act) for env, act in zip(envs, actions)])
+    return np.stack(
+        [tokenize_actions(env, act) for env, act in zip(envs, actions)]
+    )
 
 def batch_tokenize_envs(envs: List[str]) -> np.ndarray:
     """Tokenize a list of environments."""
@@ -301,9 +304,30 @@ def batch_tokenize_envs(envs: List[str]) -> np.ndarray:
             return 'Berzerk'
         else:
             return env
-    return np.array([GAME_NAMES.index(map_test_env_to_similar_train_env(env)) for env in envs])
+
+    return np.array([
+        GAME_NAMES.index(
+            map_test_env_to_similar_train_env(env)
+        ) for env in envs
+    ])
+
+def init_action_masks():
+    action_masks = []
+
+    for env in GAME_NAMES:
+        action_mask_for_each_env = []
+        for action in range(ATARI_NUM_ACTIONS):
+            action_mask_for_each_env.append(
+                action in LIMITED_ACTION_TO_FULL_ACTION[env]
+            )
+        action_masks.append(action_mask_for_each_env)
+        
+    return torch.tensor(action_masks, dtype=torch.bool)
+
+action_masks = init_action_masks()
 
 
 if __name__ == "__main__":
     print(tokenize_actions("Assault", np.array([0, 1, 2, 3, 4, 5, 6])))
     print(batch_tokenize_envs(["Assault"]))
+    print(action_masks)

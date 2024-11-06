@@ -46,9 +46,18 @@ def configure_optimizer(model, learning_rate, weight_decay, critic_lr, *blacklis
 
     # create the pytorch optimizer object
     optim_groups = [
-        {"params": [param_dict[pn] for pn in sorted(list(decay))], "weight_decay": weight_decay, "lr": learning_rate},
-        {"params": [param_dict[pn] for pn in sorted(list(no_decay))], "weight_decay": 0.0, "lr": learning_rate},
-        {"params": [param_dict[pn] for pn in sorted(list(head_q))], "weight_decay": weight_decay, "lr": critic_lr},
+        {
+            "params": [param_dict[pn] for pn in sorted(list(decay))], 
+            "weight_decay": weight_decay, "lr": learning_rate
+        },
+        {
+            "params": [param_dict[pn] for pn in sorted(list(no_decay))], 
+            "weight_decay": 0.0, "lr": learning_rate
+        },
+        {
+            "params": [param_dict[pn] for pn in sorted(list(head_q))], 
+            "weight_decay": weight_decay, "lr": critic_lr
+        },
     ]
     optimizer = torch.optim.AdamW(optim_groups)
     return optimizer
@@ -206,7 +215,13 @@ class ZeroEmbedding(nn.Embedding):
         self.weight.zero_()
         
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return torch.zeros(x.size(0), x.size(1), self.embedding_dim, device=x.device, dtype=self.weight.dtype)
+        return torch.zeros(
+            x.size(0), 
+            x.size(1), 
+            self.embedding_dim, 
+            device=x.device, 
+            dtype=self.weight.dtype
+        )
     
     
 class NormedLinear(nn.Linear):
@@ -245,7 +260,11 @@ def mlp(in_dim, mlp_dims, out_dim, act=None, dropout=0.):
 	mlp = nn.ModuleList()
 	for i in range(len(dims) - 2):
 		mlp.append(NormedLinear(dims[i], dims[i+1], dropout=dropout*(i==0)))
-	mlp.append(NormedLinear(dims[-2], dims[-1], act=act) if act else nn.Linear(dims[-2], dims[-1]))
+	mlp.append(
+        NormedLinear(
+            dims[-2], dims[-1], act=act
+        ) if act else nn.Linear(dims[-2], dims[-1])
+    )
 	return nn.Sequential(*mlp)
 
 
@@ -307,3 +326,31 @@ class StepNode:
     @property
     def score(self) -> float:
         return self.sum_r + self.gamma * self.v_star
+
+
+class ShiftAug(nn.Module):
+    """
+    Random shift image augmentation.
+    Adapted from https://github.com/facebookresearch/drqv2
+    """
+    def __init__(self, pad=3):
+        super().__init__()
+        self.pad = pad
+
+    def forward(self, x):
+        origin_dtype = x.dtype
+        x = x.to(torch.float32)
+        n, _, h, w = x.size()
+        padding = tuple([self.pad] * 4)
+        x = F.pad(x, padding, 'replicate')
+        eps = 1.0 / (h + 2 * self.pad)
+        arange = torch.linspace(-1.0 + eps, 1.0 - eps, h + 2 * self.pad, device=x.device, dtype=x.dtype)[:h]
+        arange = arange.unsqueeze(0).repeat(h, 1).unsqueeze(2)
+        base_grid = torch.cat([arange, arange.transpose(1, 0)], dim=2)
+        base_grid = base_grid.unsqueeze(0).repeat(n, 1, 1, 1)
+        shift = torch.randint(0, 2 * self.pad + 1, size=(n, 1, 1, 2), device=x.device, dtype=x.dtype)
+        shift *= 2.0 / (h + 2 * self.pad)
+        grid = base_grid + shift
+        result = F.grid_sample(x, grid, padding_mode='zeros', align_corners=False)
+        result = result.to(origin_dtype)
+        return result

@@ -1,5 +1,0 @@
-defaults:
-  - _self_
-  - tokenizer: default
-  - transformer: JOWA_150M
-  - critic_head: JOWA_150M

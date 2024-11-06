@@ -1,74 +1,80 @@
 defaults:
   - _self_
   - tokenizer: default
-  - transformer: JOWA_150M
-  - critic_head: JOWA_150M
+  - transformer: JOWA_40M
+  - critic_head: JOWA_40M
 
 wandb:
   mode: online
   project: JOWA
   entity: null
-  name: planning_${training.action.use_imagination}_bw_${training.action.planning_beam_width}_h_${training.action.planning_horizon}_q_penalty_${training.action.q_penalty}_real_bs_${training.world.batch_size}_imagined_bs_${training.world.imagine_batch_size}_wm_lr_${training.world.learning_rate}_critic_lr_${training.world.critic_lr}
+  name: planning_${training.action.use_imagination}_bw_${training.action.planning_beam_width}_h_${training.action.planning_horizon}_q_penalty_${training.action.q_penalty}_real_bs_${training.world.batch_size}_imagined_bs_${training.action.batch_size_in_imagination}_wm_lr_${training.world.first_stage.learning_rate}_critic_lr_${training.action.learning_rate}_num_q_${critic_head.num_q}
   group: null
   tags: null
   notes: null
 
 initialization:
-  load_tokenizer: null  # path of ckpt
+  load_tokenizer: outputs/vqvae_and_world_model/2024-11-02/02-46-27/checkpoints/epoch_6_step_175806  # checkpoints/JOWA  # path of ckpt
   load_optimizer_tokenizer: False
-  load_world_model: ${initialization.load_tokenizer}
-  load_world_model_name: JOWA_150M
-  load_optimizer_world_model: False
+  load_jowa: ${initialization.load_tokenizer}
+  load_jowa_name: JOWA_40M
+  load_optimizer_jowa: False
   load_start_epoch: False
 
 common:
-  env: [
+  envs: [
     Phoenix, 
     Centipede, 
     SpaceInvaders, 
     Carnival, 
     NameThisGame, 
     Assault, 
-    Atlantis, 
-    BeamRider, 
-    Seaquest, 
-    TimePilot, 
-    Berzerk, 
-    Zaxxon, 
-    DemonAttack, 
-    ChopperCommand, 
-    StarGunner
+    # Atlantis, 
+    # BeamRider, 
+    # Seaquest, 
+    # TimePilot, 
+    # Berzerk, 
+    # Zaxxon, 
+    # DemonAttack, 
+    # ChopperCommand, 
+    # StarGunner
   ]
-  epochs: 1000
+  epochs: 100
+  steps: 5e6  # gradient steps
   device: cuda
   do_checkpoint: True  # whether save optimizer
   seed: 0
-  sequence_length: ${world_model.max_blocks}
+  sequence_length: ${transformer.max_blocks}
 
 training:
   should: True
-  log_interval: 500
-  max_ckpts: 20
+  log_interval: 1000
+  max_ckpts: 5
   dtype: bfloat16
   tokenizer:
-    should: True
-    learning_rate: 0.00005
-    batch_size: 256  # per rank
+    first_stage:
+      should: True
+    second_stage:
+      should: False
+    learning_rate: 0.0001
+    batch_size: 2048  # all batch_size in this file is the num in total, not per rank
     max_grad_norm: 1.0
   world:
-    learning_rate: 0.00005
+    first_stage:
+      learning_rate: 0.0001
+    second_stage:
+      learning_rate: 0.00005
     # batch size will be this value when not using imagnation data, 
     # otherwise will be this value minus ${training.action.batch_size_in_imagination}
-    batch_size: 64
+    batch_size: 512
     max_grad_norm: 1.0
     weight_decay: 0.01
-    imagine_horizon: ${common.sequence_length}
   action:
-    train_critic: True
-    train_critic_after_n_steps: 0
+    learning_rate: ${training.world.second_stage.learning_rate}
+    train_critic_after_n_steps: -1  # means switching stages
     use_imagination: False
-    imagine_after_n_steps: 3000
-    learning_rate: 0.00005
+    imagine_after_n_steps: 3000  # imagine_after_n_steps > train_critic_after_n_steps
+    imagine_horizon: ${common.sequence_length}
     gamma: 0.99  # discount factor
     # Q distribution
     vmin: -10
@@ -86,7 +92,7 @@ training:
     # target Q head
     target_update_frequency: 1000  # hard update
     # imagination / data augmentation
-    batch_size_in_imagination: 8
+    batch_size_in_imagination: 512
     policy_in_imagination: 'planning'  # in ['planning', 'epsilon-greedy']
     # planning in imagination
     planning_beam_width: 2
@@ -94,7 +100,7 @@ training:
     # epsilon-greedy policy in imagination
     initial_epsilon: 1.0
     final_epsilon: 0.1
-    final_training_steps: 20000
+    decay_steps: 20000
 
 evaluation:
   should: True
@@ -104,9 +110,12 @@ evaluation:
     step_frequency: 125000
     epoch_frequency: 1
   env:
-    env_name: DemonAttack  # single env eval during training
+    # env_name: DemonAttack  # single env eval during training
+    # buffer_size: 2
+    env_name: Assault
+    buffer_size: 6
+
     num_eval_episodes: 1  # per rank
-    num_given_steps: 2
     max_time: 180  # seconds
     fps: 15
     header: False  # verbose info
@@ -115,7 +124,7 @@ evaluation:
 
 datasets:
   train:
-    num_of_workers: 32
+    num_of_workers: 64  # per node, not per rank
 
 hydra:
   run:

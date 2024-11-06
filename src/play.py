@@ -13,7 +13,7 @@ from action_tokenizer import ATARI_NUM_ACTIONS, GAME_NAMES
 from agent import Agent
 from envs import AtariEnvWrapper, SingleProcessEnv
 from game import AgentEnv, Game
-from models.world_model import WorldModel
+from models.jowa_model import JOWAModel
 from utils import set_seed
 
 warnings.filterwarnings("ignore")
@@ -44,7 +44,7 @@ def main(cfg: DictConfig):
     size = [h, w]
     
     tokenizer = instantiate(cfg.tokenizer)
-    world_model = WorldModel(
+    jowa_model = JOWAModel(
         obs_vocab_size=cfg.tokenizer.vocab_size,
         act_vocab_size=ATARI_NUM_ACTIONS,
         config_transformer=instantiate(cfg.transformer),
@@ -60,7 +60,7 @@ def main(cfg: DictConfig):
     )
     agent = Agent(
         tokenizer, 
-        world_model, 
+        jowa_model, 
         env_token, 
         cfg.common.dtype, 
         cfg.common.num_given_steps, 
@@ -73,9 +73,9 @@ def main(cfg: DictConfig):
     agent.load(
         cfg.initialization.path_to_checkpoint, 
         cfg.initialization.load_tokenizer, 
-        cfg.initialization.load_world_model,
+        cfg.initialization.load_jowa_model,
         cfg.initialization.tokenizer_name,
-        cfg.initialization.world_model_name,
+        cfg.initialization.jowa_model_name,
     )
     agent.eval()
     
@@ -103,7 +103,7 @@ def main(cfg: DictConfig):
     episode_info_collect = game.run(
         max_time=cfg.common.max_time, 
         max_steps=cfg.common.max_steps,
-        name_prefix=f'{cfg.initialization.world_model_name}_play_{cfg.common.game_name}',
+        name_prefix=f'{cfg.initialization.jowa_model_name}_play_{cfg.common.game_name}',
     )
     
     static_metric('clipped_return', episode_info_collect)

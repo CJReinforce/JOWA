@@ -13,7 +13,11 @@ from action_tokenizer import ATARI_NUM_ACTIONS, FULL_ACTION_TO_LIMITED_ACTION
 class AtariEnvWrapper():
     """Environment wrapper with a unified API."""
 
-    def __init__(self, game_name: str, full_action_set: Optional[bool] = True, seed: Optional[int] = None):
+    def __init__(
+      self, 
+      game_name: str, 
+      full_action_set: Optional[bool] = True, 
+    ):
         # Disable randomized sticky actions to reduce variance in evaluation.
         self._env = None
         self.game_name = game_name

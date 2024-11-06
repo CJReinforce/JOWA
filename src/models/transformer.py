@@ -58,7 +58,11 @@ class Transformer(nn.Module):
             device,
         )
 
-    def forward(self, sequences: torch.Tensor, past_keys_values: Optional[KeysValues] = None) -> torch.Tensor:
+    def forward(
+        self, 
+        sequences: torch.Tensor, 
+        past_keys_values: Optional[KeysValues] = None,
+    ) -> torch.Tensor:
         assert past_keys_values is None or len(past_keys_values) == len(self.blocks)
         x = self.drop(sequences)
         for i, block in enumerate(self.blocks):
@@ -81,7 +85,11 @@ class Block(nn.Module):
             nn.Dropout(config.resid_pdrop),
         )
 
-    def forward(self, x: torch.Tensor, past_keys_values: Optional[KeysValues] = None) -> torch.Tensor:
+    def forward(
+        self, 
+        x: torch.Tensor, 
+        past_keys_values: Optional[KeysValues] = None,
+    ) -> torch.Tensor:
         x_attn = self.attn(self.ln1(x), past_keys_values)
         x = x + x_attn
         x = x + self.mlp(self.ln2(x))
@@ -109,10 +117,16 @@ class SelfAttention(nn.Module):
             block_causal_mask = torch.max(
                 causal_mask, 
                 torch.block_diag(*[
-                    torch.ones(config.tokens_per_block, config.tokens_per_block) for _ in range(config.max_blocks)
+                    torch.ones(
+                        config.tokens_per_block, 
+                        config.tokens_per_block,
+                    ) for _ in range(config.max_blocks)
                 ])
             )
-            self.register_buffer('mask', causal_mask if config.attention == 'causal' else block_causal_mask)
+            self.register_buffer(
+                'mask', 
+                causal_mask if config.attention == 'causal' else block_causal_mask
+            )
 
     def forward(self, x: torch.Tensor, kv_cache: Optional[KVCache] = None) -> torch.Tensor:
         B, T, C = x.size()
@@ -122,9 +136,15 @@ class SelfAttention(nn.Module):
         else:
             L = 0
 
-        q = self.query(x).view(B, T, self.num_heads, C // self.num_heads).transpose(1, 2)   # (B, nh, T, hs)
-        k = self.key(x).view(B, T, self.num_heads, C // self.num_heads).transpose(1, 2)     # (B, nh, T, hs)
-        v = self.value(x).view(B, T, self.num_heads, C // self.num_heads).transpose(1, 2)   # (B, nh, T, hs)
+        q = self.query(x).view(
+            B, T, self.num_heads, C // self.num_heads
+        ).transpose(1, 2)   # (B, nh, T, hs)
+        k = self.key(x).view(
+            B, T, self.num_heads, C // self.num_heads
+        ).transpose(1, 2)     # (B, nh, T, hs)
+        v = self.value(x).view(
+            B, T, self.num_heads, C // self.num_heads
+        ).transpose(1, 2)   # (B, nh, T, hs)
 
         if kv_cache is not None:
             kv_cache.update(k, v)
@@ -137,7 +157,7 @@ class SelfAttention(nn.Module):
                 k.transpose(1, 2).to(dtype=q.dtype), 
                 v.transpose(1, 2).to(dtype=q.dtype),
                 dropout_p=self.dropout if self.training else 0, 
-                causal=True
+                causal=True,
             )
             y = rearrange(y, 'b t h e -> b t (h e)')
         else:

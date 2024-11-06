@@ -10,8 +10,16 @@ def create_empty_matrix(n, num_heads, max_tokens, embed_dim, device):
 
 
 class Cache:
-    def __init__(self, num_samples: int, num_heads: int, max_tokens: int, embed_dim: int, device: torch.device) -> None:
+    def __init__(
+        self, 
+        num_samples: int, 
+        num_heads: int, 
+        max_tokens: int, 
+        embed_dim: int, 
+        device: torch.device,
+    ) -> None:
         assert embed_dim % num_heads == 0
+        
         self._n, self._cache, self._size = num_samples, None, None
         self._reset = partial(
             create_empty_matrix, 
@@ -25,6 +33,7 @@ class Cache:
     @property
     def shape(self) -> Tuple[int, int, int, int]:
         n, num_heads, _, head_dim = self._cache.shape
+        
         return n, num_heads, self._size, head_dim
 
     def reset(self) -> None:
@@ -33,6 +42,7 @@ class Cache:
 
     def prune(self, mask: np.ndarray) -> None:
         assert mask.ndim == 1 and mask.shape[0] == self.shape[0]
+        
         self._cache = self._cache[mask]
         self._n = self._cache.shape[0]
 
@@ -40,9 +50,17 @@ class Cache:
         return self._cache[:, :, :self._size, :]
 
     def update(self, x: torch.Tensor) -> None:
-        assert (x.ndim == self._cache.ndim) and all([x.size(i) == self._cache.size(i) for i in (0, 1, 3)])
+        assert (x.ndim == self._cache.ndim) and all(
+            [x.size(i) == self._cache.size(i) for i in (0, 1, 3)])
         assert self._size + x.size(2) <= self._cache.shape[2]
-        self._cache = AssignWithoutInplaceCheck.apply(self._cache, x, 2, self._size, self._size + x.size(2))
+        
+        self._cache = AssignWithoutInplaceCheck.apply(
+            self._cache, 
+            x, 
+            2, 
+            self._size, 
+            self._size + x.size(2),
+        )
         self._size += x.size(2)
 
 
@@ -122,7 +140,14 @@ class AssignWithoutInplaceCheck(torch.autograd.Function):
         return tuple([slice(None), ] * dim + [slice(start, stop)])
 
     @staticmethod
-    def forward(ctx, input: torch.Tensor, value: torch.Tensor, dim: int, start: int, stop: int) -> torch.Tensor:
+    def forward(
+        ctx, 
+        input: torch.Tensor, 
+        value: torch.Tensor, 
+        dim: int, 
+        start: int, 
+        stop: int,
+    ) -> torch.Tensor:
         ctx.dim = dim
         ctx.start = start
         ctx.stop = stop
@@ -131,7 +156,9 @@ class AssignWithoutInplaceCheck(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_out: torch.Tensor) -> Tuple[torch.Tensor]:
-        return grad_out, grad_out[AssignWithoutInplaceCheck.get_slice(ctx.dim, ctx.start, ctx.stop)], None, None, None
+        return grad_out, grad_out[
+            AssignWithoutInplaceCheck.get_slice(ctx.dim, ctx.start, ctx.stop)
+        ], None, None, None
 
 
 def concate_kv(kvs, repeat_num: int = 1):
@@ -142,7 +169,14 @@ def concate_kv(kvs, repeat_num: int = 1):
     num_layers = len(kvs[0])
     size = kvs[0][0]._k_cache._size
 
-    result_kv = KeysValues(n * repeat_num * len(kvs), num_heads, max_tokens, embed_dim, num_layers, device)
+    result_kv = KeysValues(
+        n * repeat_num * len(kvs), 
+        num_heads, 
+        max_tokens, 
+        embed_dim, 
+        num_layers, 
+        device,
+    )
     
     for i in range(num_layers):
         all_k_cache = []
@@ -156,12 +190,16 @@ def concate_kv(kvs, repeat_num: int = 1):
         all_v_cache = torch.cat(all_v_cache, dim=0)
         
         result_kv[i]._k_cache._cache = AssignWithoutInplaceCheck.apply(
-            result_kv[i]._k_cache._cache, all_k_cache[:, :, :size, :], 2, 0, size,
+            result_kv[i]._k_cache._cache, 
+            all_k_cache[:, :, :size, :], 
+            2, 0, size,
         )
         result_kv[i]._k_cache._size = size
         
         result_kv[i]._v_cache._cache = AssignWithoutInplaceCheck.apply(
-            result_kv[i]._v_cache._cache, all_v_cache[:, :, :size, :], 2, 0, size,
+            result_kv[i]._v_cache._cache,
+            all_v_cache[:, :, :size, :], 
+            2, 0, size,
         )
         result_kv[i]._v_cache._size = size
 
@@ -183,12 +221,16 @@ def split_kv(kv):
         
         for j in range(num_layers):
             splited_kv[j]._k_cache._cache = AssignWithoutInplaceCheck.apply(
-                splited_kv[j]._k_cache._cache, kv[j]._k_cache._cache[[i], :, :size, :], 2, 0, size,
+                splited_kv[j]._k_cache._cache, 
+                kv[j]._k_cache._cache[[i], :, :size, :], 
+                2, 0, size,
             )
             splited_kv[j]._k_cache._size = size
             
             splited_kv[j]._v_cache._cache = AssignWithoutInplaceCheck.apply(
-                splited_kv[j]._v_cache._cache, kv[j]._v_cache._cache[[i], :, :size, :], 2, 0, size,
+                splited_kv[j]._v_cache._cache, 
+                kv[j]._v_cache._cache[[i], :, :size, :], 
+                2, 0, size,
             )
             splited_kv[j]._v_cache._size = size            
         result_kvs.append(splited_kv)

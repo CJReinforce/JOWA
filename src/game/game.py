@@ -25,6 +25,7 @@ class Game:
         verbose: bool = False, 
         record_mode: bool = False, 
         save_in_rgb: bool = False,
+        record_dir: Path = None,
     ) -> None:
         self.env = env
         self.height, self.width = size
@@ -32,11 +33,13 @@ class Game:
         self.verbose = verbose
         self.record_mode = record_mode
         self.save_in_rgb = save_in_rgb
-        self.keymap, self.action_names = get_keymap_and_action_names(keymap_name)
+        self.keymap, self.action_names = get_keymap_and_action_names(
+            keymap_name
+        )
         self.num_eval_episodes = num_eval_episodes
         self.episodes = 0
 
-        self.record_dir = Path('media')
+        self.record_dir = Path('media') if record_dir is None else record_dir
 
     def run(
         self, 
@@ -44,7 +47,6 @@ class Game:
         max_steps: Optional[float] = None,
         name_prefix: Optional[str] = None,
     ) -> None:
-
         if isinstance(self.env, gym.Env):
             _, info = self.env.reset(return_info=True)
             img = info['rgb']
@@ -71,17 +73,21 @@ class Game:
 
             if done or (
                 max_time is not None and info['time'] >= max_time
-            ) or (max_steps is not None and info['timestep'] >= max_steps):
+            ) or (
+                max_steps is not None and info['timestep'] >= max_steps
+            ):
                 self.episodes += 1
-                # print(f'Episode {self.episodes} / {self.num_eval_episodes} done.')
                 pprint(info)
                 episode_info_collect.append(info)
                 self.env.reset()
 
                 if self.record_mode:
+                    name_prefix_ = name_prefix + "_" if name_prefix is not None else ""
+                    date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    
                     self.save_recording(
                         np.stack(episode_buffer),
-                        f'{name_prefix + "_" if name_prefix is not None else ""}score_{info["return"]}_timestamp_{datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}'
+                        f'{name_prefix}score_{info["return"]}_timestamp_{date}'
                     )
                     episode_buffer = []
                     

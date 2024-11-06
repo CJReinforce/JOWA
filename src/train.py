@@ -2,6 +2,7 @@ import functools
 import os
 import pickle
 import random
+import re
 import shutil
 import sys
 import time
@@ -35,17 +36,23 @@ from action_tokenizer import (
     tokenize_actions,
 )
 from agent import Agent
-from dataset import AtariTrajectory, collate_fn
+from dataset import (
+    AtariTrajectory, 
+    AtariTrajWithObsToken, 
+    AtariTrajWithObsTokenInMemory,
+    collate_fn,
+)
 from envs import AtariEnvWrapper, SingleProcessEnv
 from game import AgentEnv, Game
 from make_reconstructions import make_reconstructions_of_trajectories
-from models.world_model import WorldModel
+from models.jowa_model import JOWAModel
 from replay_buffer import ReplayBuffer
 from utils import (
     capitalize_game_name,
     configure_optimizer,
     get_dtype,
     get_random_state,
+    hydra_main,
     load_random_state,
     set_seed,
 )
@@ -65,31 +72,30 @@ class Trainer:
         local_rank = int(os.environ['LOCAL_RANK'])
         torch.cuda.set_device(local_rank)
         
-        # training description
-        self.training_desc = 'world'
-        if cfg.training.world_model.train_critic:
-            self.training_desc += '-action'
-        if cfg.training.tokenizer.should:
-            self.training_desc = 'vqvae + ' + self.training_desc
-        self.training_desc += ' model'
-        
         # ddp settings
         self.world_size = int(os.environ['WORLD_SIZE'])
+        self.local_world_size = int(os.environ['LOCAL_WORLD_SIZE'])
         self.rank = int(os.environ['RANK'])
         self.local_rank = local_rank
         self.is_main_process = self.rank == 0
 
-        # Initialize wandb and saving dir
+        self.cfg = cfg
+        self.global_training_step = 0
+
+        # dirs 
+        save_root_dir = Path(f'outputs/{time.strftime("%Y-%m-%d/%H-%M-%S")}')
+        self.ckpt_dir = save_root_dir / 'checkpoints'
+        self.media_dir = save_root_dir / 'media'
+        self.reconstructions_dir = self.media_dir / 'reconstructed_imgs'
+        self.video_dir = self.media_dir / 'game_records'
+
+        # Initialize wandb and dirs
         if self.is_main_process:
+            print(f'{"Hydra Config":#^50}')
+            pprint(OmegaConf.to_container(cfg, resolve=True, throw_on_missing=True))
+            print('#' * 50)
             print(f"Train {self.training_desc} with {self.world_size} GPUs.")
             
-            save_root_dir = Path(
-                'outputs/{model}/{time}'.format(
-                    model=self.training_desc.replace(
-                        " + ", "_and_").replace(" ", "_").replace("-", "_"),
-                    time=time.strftime("%Y-%m-%d/%H-%M-%S"),
-                )
-            )
             save_root_dir.mkdir(exist_ok=False, parents=True)
             
             wandb.init(
@@ -100,66 +106,84 @@ class Trainer:
                 **cfg.wandb
             )
 
-            self.ckpt_dir = save_root_dir / 'checkpoints'
-            self.reconstructions_dir = save_root_dir / 'reconstructed_imgs'
-
             self.ckpt_dir.mkdir(exist_ok=False, parents=False)
+            self.media_dir.mkdir(exist_ok=False, parents=False)
             self.reconstructions_dir.mkdir(exist_ok=False, parents=False)
+            self.video_dir.mkdir(exist_ok=False, parents=False)
             
         set_seed(cfg.common.seed)
 
-        self.cfg = cfg
         self.start_epoch = 1
-        
         self.device = torch.device(cfg.common.device)
         self.dtype = get_dtype(cfg.training.dtype)
-        self.use_imagination = cfg.training.action.use_imagination
-        
+
+        # model        
         self.tokenizer = instantiate(cfg.tokenizer).to(self.device)
         self.tokenizer = torch.nn.parallel.DistributedDataParallel(
             self.tokenizer, 
             device_ids=[local_rank]
         )
 
-        self.world_model = WorldModel(
+        self.jowa_model = JOWAModel(
             obs_vocab_size=cfg.tokenizer.vocab_size,
             act_vocab_size=ATARI_NUM_ACTIONS,
             config_transformer=instantiate(cfg.transformer),
             config_critic_arch=cfg.critic_head,
             config_critic_train=cfg.training.action,
             device=self.device,
-            name='150M wm',
+            name='JOWA_40M',
         ).to(self.device)
-        self.world_model = torch.nn.parallel.DistributedDataParallel(
-            self.world_model, 
+        self.jowa_model = torch.nn.parallel.DistributedDataParallel(
+            self.jowa_model, 
             device_ids=[local_rank]
         )
         
+        # count parameters
         if self.is_main_process:
             print(f'Training dtype: {self.dtype}, seed: {cfg.common.seed}')
-            tokenizer_params_num = sum(p.numel() for p in self.tokenizer.parameters()) / 10 ** 6
-            print(f'{tokenizer_params_num:.2f}M parameters in tokenizer.')
 
-            for world_model in self.all_wms:
-                wm_params_num = sum(p.numel() for p in world_model.parameters()) / 10 ** 6
-                print(f'{wm_params_num:.2f}M parameters in {str(world_model.module)}, {tokenizer_params_num+wm_params_num:.2f}M parameters in total.')
+            token_params_num = sum(
+                p.numel() for p in self.tokenizer.parameters()
+            ) / 10 ** 6
+            print(f'{token_params_num:.2f}M params in tokenizer.')
 
-        self.train_dataset = AtariTrajectory(
-            data_path='offline_dataset/', 
-            csv_path='dataset_csv/tune_envs_sample_from_end.csv', 
-            sequence_length=cfg.common.sequence_length,
-            envs=cfg.common.env,
+            for jowa in self.all_jowas:
+                jowa_params_num = sum(
+                    p.numel() for p in jowa.parameters()
+                ) / 10 ** 6
+                print(f'{jowa_params_num:.2f}M params in transformer and heads.')
+                print(
+                    f'{token_params_num + jowa_params_num:.2f}M params in {str(jowa.module)}.'
+                )
+
+        # data
+        # self.train_dataset = AtariTrajectory(
+        #     data_dir='dataset/downsampled/trajectory/data', 
+        #     csv_dir='dataset/downsampled/segment/csv', 
+        #     envs=cfg.common.envs,
+        #     csv_suffix="_right_padding", 
+        # )
+        self.train_dataset = AtariTrajWithObsTokenInMemory(
+            data_dir='dataset/downsampled/trajectory/token_data', 
+            csv_dir='dataset/downsampled/segment/csv', 
+            envs=cfg.common.envs,
+            csv_suffix="_right_padding", 
+            show_pbar=self.local_rank == 0,
+            local_rank=self.local_rank,
         )
+        # use obs-token dataset only when not training tokenizer
+        assert not self.get_config_in_this_stage(cfg.training.tokenizer).should
         self.train_sampler = torch.utils.data.distributed.DistributedSampler(
             self.train_dataset, 
+            num_replicas=self.world_size, 
+            rank=self.rank,
             seed=cfg.common.seed,
         )
         self.train_dataloader = DataLoader(
             dataset=self.train_dataset,
-            batch_size=self.cfg.training.world_model.batch_num_samples + \
-                self.cfg.training.world_model.imagine_batch_size,
+            batch_size=cfg.training.world.batch_size // self.world_size,
             collate_fn=collate_fn,
-            num_workers=cfg.datasets.train.num_of_workers,
+            num_workers=cfg.datasets.train.num_of_workers // self.local_world_size,
             sampler=self.train_sampler,
             pin_memory=True,
             prefetch_factor=2,
@@ -168,172 +192,270 @@ class Trainer:
         if self.use_imagination:
             self.imagine_sampler = torch.utils.data.distributed.DistributedSampler(
                 self.train_dataset, 
-                seed=cfg.common.seed + 100,
+                num_replicas=self.world_size, 
+                rank=self.rank,
+                seed=cfg.common.seed + 10000,
             )
             self.imagine_dataloader = DataLoader(
                 dataset=self.train_dataset,
-                batch_size=self.cfg.training.world_model.imagine_batch_size,
+                batch_size=cfg.training.world.batch_size // self.world_size,
                 collate_fn=collate_fn,
-                num_workers=cfg.datasets.train.num_of_workers,
-                sampler=self.train_sampler,
+                num_workers=cfg.datasets.train.num_of_workers // self.local_world_size,
+                sampler=self.imagine_sampler,
                 pin_memory=True,
                 prefetch_factor=2,
             )
             self.imagine_replay = ReplayBuffer(
-                cfg.common.sequence_length, 
-                len(self.train_dataset) * 10,
-                cfg.world_model.tokens_per_block - 1,
+                sequence_length=cfg.common.sequence_length, 
+                capacity=len(self.train_dataset) * 10,
+                obs_shape=(1, 84, 84),
                 device=self.device,
             )
 
-        self.optimizer_tokenizer = torch.optim.Adam(
-            self.tokenizer.parameters(), 
-            lr=cfg.training.tokenizer.learning_rate,
-        )
-        
-        self.optimizer_world_model = configure_optimizer(
-            self.world_model, 
-            cfg.training.world_model.learning_rate, 
-            cfg.training.world_model.weight_decay, 
-            cfg.training.world_model.critic_lr,
-        )
-
-        self.global_training_step = 0
+        self.optimizer_tokenizer, self.optimizer_jowa = self.reset_optimizers()
         
         if cfg.initialization.load_tokenizer is not None:
-            self.load_checkpoint(cfg.initialization.load_tokenizer, 'tokenizer')
+            self.load_checkpoint(
+                cfg.initialization.load_tokenizer, 
+                'tokenizer',
+                cfg.initialization.load_optimizer_tokenizer,
+            )
 
-        if cfg.initialization.load_world_model is not None:
-            self.load_checkpoint(cfg.initialization.load_world_model, cfg.initialization.load_world_model_name)
+        if cfg.initialization.load_jowa is not None:
+            self.load_checkpoint(
+                cfg.initialization.load_jowa, 
+                cfg.initialization.load_jowa_name,
+                cfg.initialization.load_optimizer_jowa,
+                cfg.initialization.load_start_epoch,
+            )
+            
+            for jowa in self.all_jowas:
+                jowa.module.hard_update_target_Q(wo_check=True)
         
-        # parameters for evaluation
-        h, w = 84, 84
-        self.size = [h, 2*w] if self.cfg.evaluation.env.do_reconstruction else [h, w]
-        self.env_token = torch.as_tensor(
-            [GAME_NAMES.index(cfg.evaluation.env.env_name)], 
-            dtype=torch.long, device=self.device
-        )
-        self.best_return = -np.inf
+        # evaluation
+        if self.cfg.evaluation.should:
+            h, w = 84, 84
+            self.size = [h, 2 * w] if \
+                self.cfg.evaluation.env.do_reconstruction else [h, w]
+            self.env_token = torch.as_tensor(
+                [GAME_NAMES.index(cfg.evaluation.env.env_name)], 
+                dtype=torch.long, 
+                device=self.device,
+            )
+            self.best_return = -np.inf
         
         dist.barrier()
     
     # if train more WM at once (such as 40M, 70M, 150M), you should modify the followings: 
     # 1. add the definitions of wm and optimizer in `__init__` function
-    # 2. all_wms function
-    # 3. all_wm_optimizers function
-    # 4. the name of them in `save` function
+    # 2. `all_jowas` function
+    # 3. `all_jowa_optimizers` function
+    # 4. `save` function
+    # 5. `load` function
     @property
-    def all_wms(self):
-        return (self.world_model,)
+    def all_jowas(self):
+        return (self.jowa_model,)
 
     @property
-    def all_wm_optimizers(self):
-        return (self.optimizer_world_model,)
+    def all_jowa_optimizers(self):
+        return (self.optimizer_jowa,)
+
+    @property
+    def training_desc(self) -> str:
+        desc = 'world'
+        if self.train_critic:
+            desc += '-action'
+        if self.get_config_in_this_stage(self.cfg.training.tokenizer).should:
+            desc = 'vqvae + ' + desc
+        desc += ' model'
+        return desc
+    
+    @property
+    def train_critic(self) -> bool:
+        return self.global_training_step > self.cfg.training.action.train_critic_after_n_steps
+
+    @property
+    def is_first_stage(self) -> bool:
+        return not self.train_critic
+
+    @property
+    def use_imagination(self) -> bool:
+        return self.train_critic and self.cfg.training.action.use_imagination
+    
+    def get_config_in_this_stage(self, cfg):
+        if hasattr(cfg, 'first_stage') and hasattr(cfg, 'second_stage'):
+            if self.is_first_stage:
+                return cfg.first_stage
+            else:
+                return cfg.second_stage
+        else:
+            return cfg
+
+    def reset_optimizers(self):
+        opt_tokenizer = torch.optim.Adam(
+            self.tokenizer.parameters(), 
+            lr=self.cfg.training.tokenizer.learning_rate,
+        )
+        
+        opt_jowa = configure_optimizer(
+            self.jowa_model, 
+            self.get_config_in_this_stage(self.cfg.training.world).learning_rate, 
+            self.cfg.training.world.weight_decay, 
+            self.cfg.training.action.learning_rate,
+        )
+        return opt_tokenizer, opt_jowa
 
     def run(self) -> None:
+        keep_running = True
+
         for epoch in range(self.start_epoch, 1 + self.cfg.common.epochs):
-            
             if self.is_main_process:
                 print(f"\nEpoch {epoch} / {self.cfg.common.epochs}\n")
                 start_time = time.time()
 
             if self.cfg.training.should:
                 self.train_sampler.set_epoch(epoch)
-                if self.cfg.actor_critic.use_imaginary_batch:
+                if self.use_imagination:
                     self.imagine_sampler.set_epoch(epoch)
-                self.train_world_model(epoch)
+
+                keep_running = self.train(epoch)
                 dist.barrier()
 
-            eval_metrics = {}
-            if self.cfg.evaluation.should and (epoch % self.cfg.evaluation.every == 0):
-                eval_metrics= self.eval_world_model(epoch)
+            metrics = {}
+
+            if self.cfg.evaluation.should:
+                eval_metrics = self.eval(epoch)
                 dist.barrier()
-            
-            if eval_metrics is None:
-                eval_metrics = {}
+                metrics.update(eval_metrics)
             
             if self.is_main_process:
-                eval_metrics.update({'epoch': epoch, 'duration': (time.time() - start_time) / 3600})
-                wandb.log(eval_metrics)
+                metrics.update(
+                    {
+                        'epoch': epoch, 
+                        'duration': (time.time() - start_time) / 3600,
+                    }
+                )
+                wandb.log(metrics)
+
+            if not keep_running:
+                break
 
         self.finish()
 
-    def train_world_model(self, epoch: int) -> None:
-        for wm in self.all_wms:
-            wm.train()
-        
-        self.tokenizer.zero_grad()
-        for wm in self.all_wms:
-            wm.zero_grad()
-        
+    def train(self, epoch: int) -> bool:
         cfg_tokenizer = self.cfg.training.tokenizer
-        cfg_world_model = self.cfg.training.world_model
+        cfg_jowa = self.cfg.training.action
+
+        keep_running = True
+
+        # record time
+        start_time = time.time()
+        load_batch_time = []
+        training_time = []
 
         for batch_ in tqdm(
             zip(
                 self.train_dataloader, 
-                self.imagine_dataloader
+                self.imagine_dataloader,
             ) if self.use_imagination else self.train_dataloader, 
             disable=not self.is_main_process, 
-            desc=f"Epoch {epoch}. Train {self.training_desc}".replace("world_model", "wm"),
+            desc=f"Train {self.training_desc}",
             file=sys.stdout,
         ):
             intermediate_losses = defaultdict(float)
-            all_wm_logs = {}
+            extra_logs = {}
+
+            # record loading batch time
+            end_time = time.time()
+            load_batch_time.append(end_time - start_time)
+            start_time = time.time()
+
             if self.use_imagination:
                 batch_, ima_batch_ = batch_
                 ima_batch = self._to_device(ima_batch_)
             batch = self._to_device(batch_)
 
             # train tokenizer
-            if cfg_tokenizer.should:
+            should_train_token = self.get_config_in_this_stage(cfg_tokenizer).should
+            extra_logs["tokenizer/train/should"] = int(should_train_token)
+            if should_train_token:
                 self.tokenizer.train()
                 
-                bs = batch['observations'].shape[0] * self.cfg.common.sequence_length
-                if bs <= cfg_tokenizer.batch_num_samples:
-                    random_idx = np.random.permutation(bs)
+                num_obs = batch['observations'].shape[0] * self.cfg.common.sequence_length
+                tokenizer_bs = cfg_tokenizer.batch_size // self.world_size
+                if num_obs <= tokenizer_bs:
+                    random_idx = np.random.permutation(num_obs)
                 else:
-                    # random_idx = np.random.choice(range(0, bs), size=(cfg_tokenizer.batch_num_samples,), replace=False)
-                    random_idx = np.random.randint(0, bs, size=(cfg_tokenizer.batch_num_samples,))
-                batch_tokenizer = {'observations': rearrange(batch['observations'], 'b t c h w -> (b t) 1 c h w')[random_idx]}
+                    random_idx = np.random.randint(
+                        0, num_obs, 
+                        size=(tokenizer_bs,)
+                    )
+                
+                # tokenizer training log
+                extra_logs["tokenizer/train/batch_size"] = len(random_idx)
+                extra_logs[
+                    "tokenizer/train/learning_rate"
+                ] = self.optimizer_tokenizer.param_groups[0]['lr']
+
+                batch_tokenizer = {
+                    'observations': rearrange(
+                        batch['observations'], 'b t c h w -> (b t) 1 c h w'
+                    )[random_idx]
+                }
 
                 with autocast(dtype=self.dtype):
-                    losses = self.tokenizer.module.compute_loss(batch_tokenizer)
+                    losses = self.tokenizer.module.compute_loss(
+                        batch_tokenizer
+                    )
                     
                 loss_total_step = losses.loss_total
                 self.optimizer_tokenizer.zero_grad()
                 loss_total_step.backward()
 
                 # log losses
-                for loss_name, loss_value in losses.intermediate_losses.items():
-                    intermediate_losses[f"tokenizer/train/{loss_name}"] += loss_value
-                intermediate_losses[f"tokenizer/train/total_loss"] += loss_total_step.item()
+                for name, value in losses.intermediate_losses.items():
+                    intermediate_losses[f"tokenizer/train/{name}"] += value
+                intermediate_losses[
+                    f"tokenizer/train/total_loss"] += loss_total_step.item()
 
                 if cfg_tokenizer.max_grad_norm is not None:
-                    torch.nn.utils.clip_grad_norm_(self.tokenizer.parameters(), cfg_tokenizer.max_grad_norm)
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        self.tokenizer.parameters(), 
+                        cfg_tokenizer.max_grad_norm,
+                    )
+                    extra_logs["tokenizer/train/grad_norm"] = grad_norm.item()
 
                 self.optimizer_tokenizer.step()
-
-            self.tokenizer.eval()
-            for wm in self.all_wms:
-                wm.train()
                 
-            # train world_model
-            for optimizer_world_model, world_model in zip(self.all_wm_optimizers, self.all_wms):
+            # train jowa
+            for opt_jowa, jowa in zip(self.all_jowa_optimizers, self.all_jowas):
+
+                # model-based data augmentation
                 if self.use_imagination and \
-                    self.global_training_step > cfg_world_model.imagine_after_n_steps:
-                    # # change random seed for augmentation / imagination
+                    self.global_training_step > cfg_jowa.imagine_after_n_steps:
+                    
+                    # switch status
+                    self.tokenizer.eval()
+                    for jowa in self.all_jowas:
+                        jowa.eval()
+                    
+                    # change random seed for augmentation / imagination
+                    # I am not sure whether is necessary
                     # cpu_rng_state, cuda_rng_state, numpy_state, python_state = get_random_state()
                     # set_seed(dist.get_rank() + epoch)
                     
                     with autocast(dtype=self.dtype):
-                        imagine_batch, imagine_logs = world_model.module.imagine(
+                        imagine_batch, imagine_logs = jowa.module.imagine(
                             ima_batch,
                             self.tokenizer.module,
-                            horizon=self.cfg.actor_critic.planning_horizon,
-                            beam_width=self.cfg.actor_critic.planning_beam_width,
+                            horizon=cfg_jowa.planning_horizon,
+                            beam_width=cfg_jowa.planning_beam_width,
+                            should_sample=False,
                         )
+                    
+                    extra_logs.update(imagine_logs)
 
+                    # gather batch from all ranks
                     imagine_batch = self._gather_batch(imagine_batch)
                     avail_idxs = imagine_batch['envs'] != -1
                         
@@ -346,179 +468,304 @@ class Trainer:
                         imagine_batch['envs'][avail_idxs].detach().cpu().numpy(),
                     )
                     
+                    # change seed for sampling
+                    cpu_rng_state, cuda_rng_state, numpy_state, python_state = get_random_state()
+                    set_seed(self.rank + epoch + np.random.randint(10000))
+
                     imagine_batch_for_training = self.imagine_replay.sample(
-                        cfg_world_model.batch_num_samples
+                        cfg_jowa.batch_size_in_imagination // self.world_size
                     )
+
+                    load_random_state(cpu_rng_state, cuda_rng_state, numpy_state, python_state)
                     
-                    # load_random_state(cpu_rng_state, cuda_rng_state, numpy_state, python_state)
                 else:
                     imagine_batch_for_training = None
-                                    
+
+                # jowa training logs
+                extra_logs[f"{str(jowa.module)}/train/real_bs"] = len(batch['ends'])
+                extra_logs[
+                    f"{str(jowa.module)}/train/imagined_bs"
+                ] = 0 if imagine_batch_for_training is None else len(imagine_batch_for_training)
+                extra_logs[f"{str(jowa.module)}/train/train_critic"] = int(self.train_critic)
+                extra_logs[
+                    f"{str(jowa.module)}/train/world_lr"
+                ] = opt_jowa.param_groups[0]['lr']
+                extra_logs[
+                    f"{str(jowa.module)}/train/action_lr"
+                ] = opt_jowa.param_groups[2]['lr']
+
+                # switch status
+                self.tokenizer.eval()
+                for jowa in self.all_jowas:
+                    jowa.train()
+                
+                # train jowa
                 with autocast(dtype=self.dtype):
-                    losses, wm_logs = world_model.module.compute_loss(
-                        batch, 
-                        self.tokenizer.module, 
-                        train_critic=cfg_world_model.train_critic and self.global_training_step > cfg_world_model.train_critic_after_n_steps, 
+                    losses, info_logs = jowa.module.compute_loss(
+                        real_batch=batch, 
+                        imagine_batch=imagine_batch_for_training,
+                        tokenizer=self.tokenizer.module, 
+                        train_critic=self.train_critic, 
                         training=True,
-                        image_batch=imagine_batch_for_training,
                     )
                 
                 loss_total_step = losses.loss_total
-                optimizer_world_model.zero_grad()
+                opt_jowa.zero_grad()
                 loss_total_step.backward()
 
-                for loss_name, loss_value in losses.intermediate_losses.items():
-                    intermediate_losses[f"{str(world_model.module)}/train/{loss_name}"] += loss_value
-                intermediate_losses[f"{str(world_model.module)}/train/total_loss"] += loss_total_step.item()
+                for name, value in losses.intermediate_losses.items():
+                    intermediate_losses[f"{str(jowa.module)}/train/{name}"] += value
+                intermediate_losses[
+                    f"{str(jowa.module)}/train/total_loss"] += loss_total_step.item()
                 
-                all_wm_logs.update(wm_logs)
+                extra_logs.update(info_logs)
 
-                if cfg_world_model.max_grad_norm is not None:
-                    torch.nn.utils.clip_grad_norm_(world_model.parameters(), cfg_world_model.max_grad_norm)
+                if self.cfg.training.world.max_grad_norm is not None:
+                    grad_norm = torch.nn.utils.clip_grad_norm_(
+                        jowa.parameters(), 
+                        self.cfg.training.world.max_grad_norm,
+                    )
+                    extra_logs[f"{str(jowa.module)}/train/grad_norm"] = grad_norm.item()
 
-                optimizer_world_model.step()
-                world_model.module.hard_update_target_Q()
+                opt_jowa.step()
+                jowa.module.hard_update_target_Q()
 
             self.global_training_step += 1
 
-            # all logs
+            if self.global_training_step == self.cfg.training.action.train_critic_after_n_steps:
+                self.optimizer_tokenizer, self.optimizer_jowa = self.reset_optimizers()
+
+            # step frequency of evaluation
+            if self.train_critic and \
+                self.global_training_step % self.cfg.evaluation.action.step_frequency == 0:
+                logs = self._eval_game(epoch, {"epoch": epoch})
+                for log in logs:
+                    extra_logs.update(log)
+
+            # wandb logs
             if self.global_training_step % self.cfg.training.log_interval == 0:
-                all_intermediate_losses = self._gather_tensor(intermediate_losses)
-                all_wm_logs = self._gather_tensor(all_wm_logs)
+                consume_time = {
+                    'info/load_batch_time': np.mean(load_batch_time),
+                    'info/training_time': np.mean(training_time)
+                }
+                load_batch_time.clear()
+                training_time.clear()
+
+                consume_time = self._gather_tensor(consume_time)
+                intermediate_loss = self._gather_tensor(intermediate_losses)
+                extra_log = self._gather_tensor(extra_logs)
 
                 if self.is_main_process:
                     logs = {
                         'training_step': self.global_training_step, 
-                        **all_intermediate_losses, 
-                        **all_wm_logs, 
+                        **consume_time,
+                        **intermediate_loss, 
+                        **extra_log, 
                     }
                     wandb.log(logs)
-            
-            if self.global_training_step == 10000:
-                self.save_checkpoint(epoch, save_agent_only=not self.cfg.common.do_checkpoint)
-                raise Exception("Stop training for testing.")
 
-            if self.global_training_step >= cfg_world_model.imagine_after_n_steps and \
-                self.cfg.actor_critic.use_imaginary_batch and \
-                    self.train_dataloader.batch_sampler.batch_size != cfg_world_model.batch_num_samples:
-                self.train_dataloader.batch_sampler.batch_size = cfg_world_model.batch_num_samples
+            target_bs = (
+                self.cfg.training.world.batch_size - cfg_jowa.batch_size_in_imagination
+            ) // self.world_size
+            if self.use_imagination and \
+                self.global_training_step > cfg_jowa.imagine_after_n_steps and \
+                    self.train_dataloader.batch_sampler.batch_size != target_bs:
+
+                self.train_dataloader.batch_sampler.batch_size = target_bs
+            
+            end_time = time.time()
+            training_time.append(end_time - start_time)
+            start_time = time.time()
+
+            if self.global_training_step >= self.cfg.common.steps:
+                keep_running = False
+                break
         
         dist.barrier()
-        self.save_checkpoint(epoch, save_agent_only=not self.cfg.common.do_checkpoint)
+        self.save_checkpoint(
+            epoch, 
+            save_agent_only=not self.cfg.common.do_checkpoint,
+        )
+        return keep_running
         
     @torch.no_grad()
-    def eval_world_model(self, train_epoch: int) -> None:
+    def eval(self, train_epoch: int) -> Dict:
+        # switch to eval
         self.tokenizer.eval()
-        for wm in self.all_wms:
-            wm.eval()
+        for jowa in self.all_jowas:
+            jowa.eval()
         
-        cfg_eval_world_model = self.cfg.evaluation.world_model
-        cfg_eval_env = self.cfg.evaluation.env
+        cfg_eval = self.cfg.evaluation
         eval_metric = {}
 
-        if self.cfg.training.world_model.train_critic and (train_epoch % cfg_eval_world_model.critic_eval_epoch_frequency == 0):
-            for world_model in self.all_wms:
-                num_given_steps = cfg_eval_env.num_given_steps
-                
-                # create env
-                env_fn = AtariEnvWrapper(cfg_eval_env.env_name).create_env
-                test_env = SingleProcessEnv(env_fn)
-                
-                agent = Agent(
-                    self.tokenizer.module, 
-                    world_model.module, 
-                    self.env_token, 
-                    self.dtype, 
-                    num_given_steps, 
-                    self.device
-                ).to(self.device)
-                agent.eval()
-                
-                env = AgentEnv(
-                    agent, 
-                    test_env, 
-                    keymap_name='atari', 
-                    do_reconstruction=cfg_eval_env.do_reconstruction
-                )
-                
-                game = Game(
-                    env, 
-                    keymap_name='empty', 
-                    size=self.size, 
-                    fps=int(cfg_eval_env.fps), 
-                    verbose=bool(cfg_eval_env.header), 
-                    record_mode=bool(cfg_eval_env.save_mode),
-                    num_eval_episodes=int(cfg_eval_env.num_eval_episodes),
-                )
-                episode_info_collect = game.run(max_time=cfg_eval_env.max_time, num_given_steps=num_given_steps)
-                episode_info_summary = {k: np.mean([i[k] for i in episode_info_collect]) for k, v in episode_info_collect[0].items() if isinstance(v, (int, float))}
-                
-                mean_return = torch.tensor([episode_info_summary['return']], dtype=torch.float32, device=self.device)
-                ret_all = [torch.zeros_like(mean_return) for _ in range(self.cfg.training.world_size)]
-                dist.all_gather(ret_all, mean_return)
-                
-                if self.is_main_process:
-                    ret_all = torch.cat(ret_all, dim=0)
-                    mean_ret_all = ret_all.mean().item()
-
-                    if mean_ret_all >= self.best_return * 0.8:
-                        self.save_checkpoint(
-                            train_epoch, 
-                            save_agent_only=not self.cfg.common.do_checkpoint, 
-                            best=True,
-                            score=mean_ret_all,
-                        )
-                        if mean_ret_all > self.best_return:
-                            self.best_return = mean_ret_all
-
-                    eval_metric.update({
-                        "epoch": train_epoch, 
-                        f"eval/{str(world_model.module)} return": mean_ret_all,
-                        "eval/num_given_steps": num_given_steps,
-                    })
+        # play game
+        if self.train_critic and train_epoch % cfg_eval.action.epoch_frequency == 0:
+            logs = self._eval_game(
+                train_epoch,
+                {
+                    "epoch": train_epoch,
+                    "training_step": self.global_training_step,
+                }
+            )
+            for log in logs:
+                eval_metric.update(log)
         
-        if cfg_eval_world_model.save_reconstructions and self.is_main_process:
+        # reconstruct trajectory
+        if cfg_eval.world.save_reconstructions and \
+            type(self.train_dataset) is AtariTrajectory and \
+                self.is_main_process:
             train_batch = self.train_dataset.sample_batch(batch_num_samples=30)
             batch = self._to_device(train_batch)
 
-            for world_model in self.all_wms:
-                with autocast(dtype=self.dtype):
+            with autocast(dtype=self.dtype):
+                for jowa in self.all_jowas:
                     make_reconstructions_of_trajectories(
                         batch, 
                         save_dir=self.reconstructions_dir, 
                         epoch=train_epoch, 
                         tokenizer=self.tokenizer.module, 
-                        world_model=world_model.module,
-                        enable_check=False,
+                        jowa=jowa.module,
                     )
                 
         return eval_metric
+    
+    @torch.no_grad()
+    def _eval_game(self, epoch: int, info: Dict = {}):
+        logs = []
+        cfg_eval = self.cfg.evaluation
 
-    def save_checkpoint(self, epoch: int, save_agent_only: bool, best: bool = False, score=None) -> None:
+        for jowa in self.all_jowas:
+            buffer_size = cfg_eval.env.buffer_size
+            
+            # create env
+            env_fn = AtariEnvWrapper(cfg_eval.env.env_name).create_env
+            test_env = SingleProcessEnv(env_fn)
+            
+            agent = Agent(
+                self.tokenizer.module, 
+                jowa.module, 
+                self.env_token, 
+                self.dtype, 
+                buffer_size, 
+                self.device,
+                should_plan=False,
+            ).to(self.device)
+            agent.eval()
+            
+            env = AgentEnv(
+                agent, 
+                test_env, 
+                keymap_name='atari', 
+                do_reconstruction=cfg_eval.env.do_reconstruction,
+                verbose=False,
+            )
+            
+            game = Game(
+                env, 
+                keymap_name='empty', 
+                size=self.size, 
+                fps=int(cfg_eval.env.fps), 
+                verbose=bool(cfg_eval.env.header), 
+                record_mode=bool(cfg_eval.env.save_mode),
+                num_eval_episodes=int(cfg_eval.env.num_eval_episodes),
+                save_in_rgb=False,
+                record_dir=self.video_dir,
+            )
+
+            episode_info_collect = game.run(
+                max_time=cfg_eval.env.max_time, 
+            )
+            episode_info_summary = {
+                k: np.mean([i[k] for i in episode_info_collect]) \
+                    for k, v in episode_info_collect[0].items() if isinstance(v, (int, float))
+            }
+            
+            mean_return = torch.tensor(
+                [episode_info_summary['return']], 
+                dtype=torch.float32, 
+                device=self.device,
+            )
+            ret_all = [torch.zeros_like(mean_return) for _ in range(self.world_size)]
+            dist.all_gather(ret_all, mean_return)
+            
+            ret_all = torch.cat(ret_all, dim=0)
+            mean_ret_all = ret_all.mean().item()
+
+            if self.is_main_process and mean_ret_all >= self.best_return * 0.8:
+                self.save_checkpoint(
+                    epoch, 
+                    save_agent_only=not self.cfg.common.do_checkpoint, 
+                    best=True,
+                    score=mean_ret_all,
+                )
+
+            if mean_ret_all > self.best_return:
+                self.best_return = mean_ret_all
+
+            log = {
+                f"{str(jowa.module)}/eval/return": mean_ret_all,
+                f"{str(jowa.module)}/eval/used_buffer_size": buffer_size,
+            }
+            log.update(info)
+            logs.append(log)
+        
+        return logs
+
+    def save_checkpoint(
+        self, 
+        epoch: int, 
+        save_agent_only: bool, 
+        best: bool = False, 
+        score=None,
+    ) -> None:
+        def extract_score(filename):
+            match = re.search(r'best_ckpt_score_(\d+?)_', filename)
+            if match:
+                return float(match.group(1))
+            return float('-inf')
+
         if self.is_main_process:
             if best:
                 assert score is not None
             
-            step_ckpt_dir = self.ckpt_dir / f'{"best_ckpt_score_" + str(int(score*1000)) + "_" if best else ""}epoch_{epoch}_step_{self.global_training_step}'
+            name_prefix = "best_ckpt_score_" + str(int(float(score))) + "_" if best else ""
+            step_ckpt_dir = self.ckpt_dir / f'{name_prefix}epoch_{epoch}_step_{self.global_training_step}'
             step_ckpt_dir.mkdir(exist_ok=False, parents=False)
             
+            # remove oldest dir
             ckpts = [f for f in self.ckpt_dir.glob('epoch_*') if f.name.startswith('epoch_')]
             ckpts.sort(key=lambda p: p.stat().st_mtime)
             if len(ckpts) > self.cfg.training.max_ckpts:
                 shutil.rmtree(ckpts[0])
+
+            # remove best dir with lowest score
+            ckpts = [f for f in self.ckpt_dir.glob('best_ckpt_score_*')]
+            ckpts.sort(key=lambda p: extract_score(p.name))
+            if len(ckpts) > self.cfg.training.max_ckpts:
+                shutil.rmtree(ckpts[0])
             
             torch.save(self.tokenizer.state_dict(), step_ckpt_dir / f'tokenizer.pt')
-            # torch.save(self.world_model_40M.state_dict(), step_ckpt_dir / f'world_model_40M.pt')
-            # torch.save(self.world_model_80M.state_dict(), step_ckpt_dir / f'world_model_80M.pt')
-            torch.save(self.world_model.state_dict(), step_ckpt_dir / f'world_model_200M.pt')
+            for jowa in self.all_jowas:
+                torch.save(jowa.state_dict(), step_ckpt_dir / f"{jowa.module}.pt")
             
             if not save_agent_only:
-                torch.save(self.optimizer_tokenizer.state_dict(), step_ckpt_dir / f'optimizer_tokenizer.pt')
-                # torch.save(self.optimizer_world_model_40M.state_dict(), step_ckpt_dir / f'optimizer_world_model_40M.pt')
-                # torch.save(self.optimizer_world_model_80M.state_dict(), step_ckpt_dir / f'optimizer_world_model_80M.pt')
-                torch.save(self.optimizer_world_model.state_dict(), step_ckpt_dir / f'optimizer_world_model_200M.pt')
+                torch.save(
+                    self.optimizer_tokenizer.state_dict(), 
+                    step_ckpt_dir / f'optimizer_tokenizer.pt'
+                )
+                for opt, opt_name in zip(
+                    self.all_jowa_optimizers, 
+                    [f'optimizer_{str(jowa.module)}' for jowa in self.all_jowas]
+                ):
+                    torch.save(opt.state_dict(), step_ckpt_dir / f'{opt_name}.pt')
 
-    def load_checkpoint(self, path, component) -> None:
+    def load_checkpoint(
+        self, 
+        path, 
+        component, 
+        load_opt: bool = False, 
+        load_start_epoch: bool = False,
+    ) -> None:
         def process_param_name(name: str) -> str:
             if name.startswith('module.'):
                 name = name[7:]
@@ -528,102 +775,73 @@ class Trainer:
                 name = name[10:]
             else:
                 pass
-            return '_orig_mod.module.' + name
-        
+            return 'module.' + name
+
         if component == 'tokenizer':
-            ckpt_token = torch.load(os.path.join(path, 'tokenizer.pt'), map_location=self.device)
-            self.tokenizer.load_state_dict(ckpt_token)
+            ckpt_token = torch.load(
+                os.path.join(path, 'tokenizer.pt'), 
+                map_location=self.device,
+            )
+            token_dict = self.tokenizer.state_dict()
+
+            for name, param in ckpt_token.items():
+                token_dict[process_param_name(name)] = param
             
-            if self.cfg.initialization.load_optimizer_tokenizer:
-                ckpt_opt_tokenizer = torch.load(os.path.join(path, 'optimizer_tokenizer.pt'), map_location=self.device)
+            self.tokenizer.load_state_dict(token_dict)
+            
+            if load_opt:
+                ckpt_opt_tokenizer = torch.load(
+                    os.path.join(path, 'optimizer_tokenizer.pt'), 
+                    map_location=self.device,
+                )
                 self.optimizer_tokenizer.load_state_dict(ckpt_opt_tokenizer)
 
-        elif component.startswith('world_model'):
-            # ckpt_world = torch.load(os.path.join(path, 'world_model_40M.pt'), map_location=self.device)
-            # world_model_dict = self.world_model_40M.state_dict()
-            # for name, param in ckpt_world.items():
-            #     if name.endswith('.indices'):
-            #         continue
-            #     elif name == "_orig_mod.module.pos_emb.weight":
-            #         world_model_dict[name] = param[:world_model_dict[name].size()[0]]
-            #     else:
-            #         world_model_dict[name] = param
-            # self.world_model_40M.load_state_dict(world_model_dict)
-            # self.world_model_40M.load_state_dict(ckpt_world)
+        elif 'jowa' in component.lower():
+            # modify if needs init of multiple jowas
+            ckpt_jowa = torch.load(
+                os.path.join(path, f'{component}.pt'), 
+                map_location=self.device,
+            )
+            jowa_dict = self.jowa_model.state_dict()
 
-            # ckpt_world = torch.load(os.path.join(path, 'world_model_80M.pt'), map_location=self.device)
-            # world_model_dict = self.world_model_80M.state_dict()
-            # for name, param in ckpt_world.items():
-            #     if name.endswith('.indices'):
-            #         continue
-            #     elif name == "_orig_mod.module.pos_emb.weight":
-            #         world_model_dict[name] = param[:world_model_dict[name].size()[0]]
-            #     else:
-            #         world_model_dict[name] = param
-            # self.world_model_80M.load_state_dict(world_model_dict)
-            # self.world_model_80M.load_state_dict(ckpt_world)
+            for name, param in ckpt_jowa.items():
+                # if 'head_q' not in name:
+                jowa_dict[process_param_name(name)] = param
             
-            ckpt_world = torch.load(os.path.join(path, f'{component}.pt'), map_location=self.device)
-            # world_model_dict = self.world_model.state_dict()
-            # for name, param in ckpt_world.items():
-            #     if name.endswith('.indices'):
-            #         continue
-            #     elif name == "_orig_mod.module.pos_emb.weight":
-            #         world_model_dict[name] = param[:world_model_dict[name].size()[0]]
-            #     else:
-            #         world_model_dict[name] = param
-            # self.world_model.load_state_dict(world_model_dict)
-            self.world_model.load_state_dict(ckpt_world)
+            self.jowa_model.load_state_dict(jowa_dict)
 
-            if self.cfg.initialization.load_optimizer_world_model:
-                # ckpt_opt_wm = torch.load(os.path.join(path, 'optimizer_world_model_40M.pt'), map_location=self.device)
-                # import ipdb; ipdb.set_trace()
-                # modify opt of embedding
-                # ckpt_opt_wm['state'][38]['exp_avg'] = ckpt_opt_wm['state'][38]['exp_avg'][:296]
-                # ckpt_opt_wm['state'][38]['exp_avg_sq'] = ckpt_opt_wm['state'][38]['exp_avg_sq'][:296]
-                # self.optimizer_world_model_40M.load_state_dict(ckpt_opt_wm)
-
-                # ckpt_opt_wm = torch.load(os.path.join(path, 'optimizer_world_model_80M.pt'), map_location=self.device)
-                # ckpt_opt_wm['state'][50]['exp_avg'] = ckpt_opt_wm['state'][50]['exp_avg'][:296]
-                # ckpt_opt_wm['state'][50]['exp_avg_sq'] = ckpt_opt_wm['state'][50]['exp_avg_sq'][:296]
-                # self.optimizer_world_model_80M.load_state_dict(ckpt_opt_wm)
-
-                ckpt_opt_wm = torch.load(os.path.join(path, 'optimizer_world_model_200M.pt'), map_location=self.device)
-                # ckpt_opt_wm['state'][86]['exp_avg'] = ckpt_opt_wm['state'][86]['exp_avg'][:296]
-                # ckpt_opt_wm['state'][86]['exp_avg_sq'] = ckpt_opt_wm['state'][86]['exp_avg_sq'][:296]
-                self.optimizer_world_model.load_state_dict(ckpt_opt_wm)
+            if load_opt:
+                ckpt_opt_jowa = torch.load(
+                    os.path.join(path, f'optimizer_{component}.pt'), 
+                    map_location=self.device,
+                )
+                self.optimizer_jowa.load_state_dict(ckpt_opt_jowa)
             
-            if self.cfg.initialization.load_start_epoch:
-                raise NotImplementedError
-                self.start_epoch = 26  # int(path.split('_')[-1]) + 1
-                
-                global_training_step = 673033
-                self.global_training_step = global_training_step
-                for wm in self.all_wms:
-                    wm.module.training_steps = global_training_step
+            if load_start_epoch:
+                self.start_epoch = int(path.split('_')[-3]) + 1
             
         else:
-            raise NotImplementedError(f"component {component} is not implemented.")
+            raise IndexError(f"component {component} does not exists.")
         
         if self.is_main_process:
-            print(f'Successfully loaded {component} from {path}.')
+            print(f'Load {component} from {path}.')
 
     def _to_device(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        return {k: batch[k].to(self.device) for k in batch}  # , non_blocking=True)
+        return {k: batch[k].to(self.device) for k in batch}
 
     def _gather_tensor(self, batch: Dict[str, float]) -> Dict[str, float]:
         res = defaultdict(float)
         for k, v in batch.items():
             tensor_v = torch.tensor(v, device=self.device)
             dist.all_reduce(tensor_v, op=dist.ReduceOp.SUM)
-            mean_v = tensor_v / self.cfg.training.world_size
+            mean_v = tensor_v / self.world_size
             res[k] = mean_v.item()
         return res
 
     def _gather_batch(self, batch):
         gathered_batches = {}
         for key, tensor in batch.items():
-            gathered_tensors = [torch.zeros_like(tensor) for _ in range(dist.get_world_size())]
+            gathered_tensors = [torch.zeros_like(tensor) for _ in range(self.world_size)]
             dist.all_gather(gathered_tensors, tensor)
             gathered_batches[key] = torch.cat(gathered_tensors, dim=0)
         return gathered_batches
@@ -633,24 +851,12 @@ class Trainer:
         dist.destroy_process_group()
 
 
-@hydra_main(config_path="../config", config_name="fine_tune")
+@hydra_main(config_path="../config", config_name="train_40M")
 def get_hydra_config(cfg: DictConfig) -> DictConfig:
     return cfg
-
-def main(rank: int, cfg: DictConfig):
-    trainer = Trainer(cfg, rank)
-    trainer.run()
 
 
 if __name__ == '__main__':
     config = get_hydra_config()
-    print(f'{"Hydra Config":#^50}')
-    pprint(OmegaConf.to_container(config, resolve=True, throw_on_missing=True))
-    print('#' * 50)
-
-    world_size= config.training.world_size
-    # ddp training
-    mp.spawn(main, args=(config,), nprocs=world_size, join=True)
-    
-    # debug
-    # main(0, config)
+    trainer = Trainer(config)
+    trainer.run()

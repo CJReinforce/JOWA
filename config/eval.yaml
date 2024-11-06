@@ -7,9 +7,9 @@ defaults:
 initialization:
   path_to_checkpoint: null
   load_tokenizer: True
-  load_world_model: True
+  load_jowa_model: True
   tokenizer_name: null
-  world_model_name: JOWA_150M
+  jowa_model_name: JOWA_150M
 
 common:
   game_name: Assault
@@ -36,15 +36,11 @@ action:
   vmax: 30
   num_atoms: 51
   td_loss: c51  # in [c51, mse]
-  # some hyperparameters necessary for running eval
   gamma: 0.99
   cql_weight: 0.1
   q_penalty: cql
   q_loss_backwards_wm: True
   use_task_embed: True
-  initial_epsilon: 1.0
-  final_epsilon: 0.1
-  final_training_steps: 20000
 
 hydra:
   run:

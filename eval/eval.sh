@@ -5,7 +5,7 @@ ckpt_path="checkpoints/JOWA"
 model_name="JOWA_150M"  # in [JOWA_150M, JOWA_70M, JOWA_40M]
 
 # config of Atari
-game=Atlantis  # 1 of the 15 pretrained games
+game=Assault  # 1 of the 15 pretrained games
 max_steps=108000
 
 # how many rollouts (episodes) during evaluation
@@ -77,7 +77,7 @@ for i in "${buffer_size[@]}"; do
         transformer=$model_name \
         critic_head=$model_name \
         initialization.path_to_checkpoint=$ckpt_path \
-        initialization.world_model_name=$model_name \
+        initialization.jowa_model_name=$model_name \
         common.num_given_steps=$i \
         common.game_name="$game" \
         common.max_steps="$max_steps" \
