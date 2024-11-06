@@ -84,16 +84,20 @@ python src/datasets/downsample.py
 
 This command processes the raw data into two formats: **(i) Trajectory-level dataset:** A hdf5 file containing transitions for each trajectory. Total size: ~1TB for 15 pretraining games. **(ii) Segment-level dataset:** CSV files containing segment indices in the correspoding trajectory.
 
-### Pretraining
+### Pre-training
 
 ```python
-python src/pretrain.py hydra/job_logging=disabled hydra/hydra_logging=disabled
+python src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled
 ```
+
+After the first stage of pre-training, we recommend using the pre-trained vqvae to encode all images in advance via the `src/save_obs_in_token.py` file, and then use the `AtariTrajWithObsTokenInMemory` class as the dataset (in the `src/train.py` file at lines 166~175) to speed up loading, since vqvae is frozen in the second stage.
 
 ### Fine-tuning
 
+🚧 ***Fine-tuning code and dataset still in progress.***
+
 ```python
-python src/fine_tune.py hydra/job_logging=disabled hydra/hydra_logging=disabled
+python src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled
 ```
 
 > [!NOTE]
