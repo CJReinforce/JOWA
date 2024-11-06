@@ -1,0 +1,112 @@
+defaults:
+  - _self_
+  - tokenizer: default
+  - transformer: JOWA_150M
+  - critic_head: JOWA_150M
+
+wandb:
+  mode: online
+  project: JOWA
+  entity: null
+  name: planning_${training.action.use_imagination}_bw_${training.action.planning_beam_width}_h_${training.action.planning_horizon}_q_penalty_${training.action.q_penalty}_real_bs_${training.world.batch_size}_imagined_bs_${training.action.batch_size_in_imagination}_wm_lr_${training.world.learning_rate}_critic_lr_${training.action.learning_rate}_num_q_${critic_head.num_q}
+  group: finetune
+  tags: null
+  notes: null
+
+initialization:
+  load_tokenizer: checkpoints/JOWA  # path of ckpt
+  load_optimizer_tokenizer: False
+  load_jowa: ${initialization.load_tokenizer}
+  load_jowa_name: JOWA_150M
+  load_optimizer_jowa: False
+  load_start_epoch: False
+
+common:
+  envs: [
+    MsPacman,
+  ]
+  epochs: 1000
+  steps: 10e3  # gradient steps
+  device: cuda
+  do_checkpoint: True  # whether save optimizer
+  seed: 0
+  sequence_length: ${transformer.max_blocks}
+
+training:
+  should: True
+  log_interval: 200
+  max_ckpts: 10
+  dtype: bfloat16
+  tokenizer:
+    should: True
+    learning_rate: 0.00005
+    batch_size: 128  # all batch_size in this file is the num in total, not per rank
+    max_grad_norm: 1.0
+  world:
+    learning_rate: 0.00005
+    # batch size will be this value when not using imagnation data, 
+    # otherwise will be this value minus ${training.action.batch_size_in_imagination}
+    batch_size: 32
+    max_grad_norm: 1.0
+    weight_decay: 0.01
+  action:
+    learning_rate: ${training.world.learning_rate}
+    train_critic_after_n_steps: -1  # means switching stages
+    use_imagination: True
+    imagine_after_n_steps: 3000  # imagine_after_n_steps > train_critic_after_n_steps
+    imagine_horizon: ${common.sequence_length}
+    gamma: 0.99  # discount factor
+    # Q distribution
+    vmin: -10
+    vmax: 30
+    num_atoms: 51
+    # loss
+    td_loss: c51  # in [c51, mse]
+    q_penalty: combo  # in [cql, combo, null]
+    cql_weight: 0.1  # for cql and combo
+    supervised_weight: 0.1  # only works when training critic head
+    # ablation
+    use_rem: False
+    use_task_embed: True
+    q_loss_backwards_wm: True
+    # target Q head
+    target_update_frequency: 1000  # hard update
+    # imagination / data augmentation
+    batch_size_in_imagination: 16
+    policy_in_imagination: 'planning'  # in ['planning', 'epsilon-greedy']
+    # planning in imagination
+    planning_beam_width: 2
+    planning_horizon: 2
+    # epsilon-greedy policy in imagination
+    initial_epsilon: 1.0
+    final_epsilon: 0.1
+    decay_steps: 20000
+
+evaluation:
+  should: True
+  world:
+    save_reconstructions: True
+  action:
+    step_frequency: 125000
+    epoch_frequency: 10
+  env:
+    # env_name: DemonAttack  # single env eval during training
+    # buffer_size: 2
+    env_name: MsPacman
+    buffer_size: 8
+
+    num_eval_episodes: 1  # per rank
+    max_time: 180  # seconds
+    fps: 15
+    header: False  # verbose info
+    do_reconstruction: False  # save reconstruction images with original images
+    save_mode: False  # save mp4 video
+
+datasets:
+  train:
+    num_of_workers: 16  # per node, not per rank
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null

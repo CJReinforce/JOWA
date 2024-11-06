@@ -87,21 +87,20 @@ This command processes the raw data into two formats: **(i) Trajectory-level dat
 ### Pre-training
 
 ```python
-python src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled
+torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=29500 src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled
 ```
 
-After the first stage of pre-training, we recommend using the pre-trained vqvae to encode all images in advance via the `src/save_obs_in_token.py` file, and then use the `AtariTrajWithObsTokenInMemory` class as the dataset (in the `src/train.py` file at lines 166~175) to speed up loading, since vqvae is frozen in the second stage.
+After the first stage of pre-training, we recommend using the pre-trained vqvae to encode all images in advance via the `src/save_obs_in_token.py` file, and then use the `AtariTrajWithObsTokenInMemory` class as the dataset (in the `src/train.py` file at lines 170~179) to speed up loading, since vqvae is frozen in the second stage.
 
 ### Fine-tuning
 
 🚧 ***Fine-tuning code and dataset still in progress.***
 
 ```python
-python src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled
+torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=39500 src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled wandb.mode=disabled
 ```
 
-> [!NOTE]
-> The pre-training and fine-tuning codes are still being organized, due to lots of variable renaming.
+Three differences between pre-training and fine-tuning: (i) the config file `finetune_150M.yaml` (ii) the reference of config file in line 868 of `src/train.py` (iii) the dataset in lines 182~187 of `src/train.py`.
 
 ## 📝 TODO
 

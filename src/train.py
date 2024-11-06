@@ -38,6 +38,7 @@ from action_tokenizer import (
 from agent import Agent
 from dataset import (
     AtariTrajectory, 
+    AtariTrajInMemory,
     AtariTrajWithObsToken, 
     AtariTrajWithObsTokenInMemory,
     collate_fn,
@@ -157,22 +158,34 @@ class Trainer:
                 )
 
         # data
+        # dataset for pretrain stage 1
         # self.train_dataset = AtariTrajectory(
         #     data_dir='dataset/downsampled/trajectory/data', 
         #     csv_dir='dataset/downsampled/segment/csv', 
         #     envs=cfg.common.envs,
         #     csv_suffix="_right_padding", 
         # )
-        self.train_dataset = AtariTrajWithObsTokenInMemory(
-            data_dir='dataset/downsampled/trajectory/token_data', 
-            csv_dir='dataset/downsampled/segment/csv', 
+
+        # dataset for pretrain stage 2
+        # self.train_dataset = AtariTrajWithObsTokenInMemory(
+        #     data_dir='dataset/downsampled/trajectory/token_data', 
+        #     csv_dir='dataset/downsampled/segment/csv', 
+        #     envs=cfg.common.envs,
+        #     csv_suffix="_right_padding", 
+        #     show_pbar=self.local_rank == 0,
+        #     local_rank=self.local_rank,
+        # )
+        # # use obs-token dataset only when not training tokenizer
+        # assert not self.get_config_in_this_stage(cfg.training.tokenizer).should
+        
+        # dataset for finetune
+        self.train_dataset = AtariTrajInMemory(
+            data_dir='dataset/finetune/expert/trajectory/data', 
+            csv_dir='dataset/finetune/expert/segment/csv', 
             envs=cfg.common.envs,
             csv_suffix="_right_padding", 
-            show_pbar=self.local_rank == 0,
-            local_rank=self.local_rank,
         )
-        # use obs-token dataset only when not training tokenizer
-        assert not self.get_config_in_this_stage(cfg.training.tokenizer).should
+
         self.train_sampler = torch.utils.data.distributed.DistributedSampler(
             self.train_dataset, 
             num_replicas=self.world_size, 
@@ -612,7 +625,7 @@ class Trainer:
         
         # reconstruct trajectory
         if cfg_eval.world.save_reconstructions and \
-            type(self.train_dataset) is AtariTrajectory and \
+            type(self.train_dataset) in (AtariTrajectory, AtariTrajInMemory) and \
                 self.is_main_process:
             train_batch = self.train_dataset.sample_batch(batch_num_samples=30)
             batch = self._to_device(train_batch)
@@ -851,7 +864,8 @@ class Trainer:
         dist.destroy_process_group()
 
 
-@hydra_main(config_path="../config", config_name="train_40M")
+# @hydra_main(config_path="../config", config_name="train_40M")
+@hydra_main(config_path="../config", config_name="finetune_150M")
 def get_hydra_config(cfg: DictConfig) -> DictConfig:
     return cfg
 

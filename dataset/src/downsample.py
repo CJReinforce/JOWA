@@ -15,10 +15,10 @@ def set_seed(seed):
     np.random.seed(seed)
     random.seed(seed)
     
-def compute_cumulative_num_of_episodes(envs, num_agents):
+def compute_cumulative_num_of_episodes(envs, num_agents, start_epoch=1, end_epoch=50):
     df = pd.DataFrame(columns=['Total episodes', 'Total steps', 'Steps per episode'], index=envs)
     env_choosed_indices = {}
-    cumu_episodes = np.zeros((len(envs), num_agents, 50), dtype=int)
+    cumu_episodes = np.zeros((len(envs), num_agents, end_epoch - start_epoch + 1), dtype=int)
 
     for index_env, env_ in enumerate(tqdm(envs)):
         env = capitalize_game_name(env_) if env_[0].islower() else env_
@@ -27,7 +27,7 @@ def compute_cumulative_num_of_episodes(envs, num_agents):
         env_choosed_indices[env] = choosed_indices
         
         for index_agent, index in enumerate(choosed_indices):
-            for index_epoch, epoch in enumerate(range(1, 51)):
+            for index_epoch, epoch in enumerate(range(start_epoch, end_epoch + 1)):
                 path = path_format.format(env, index, 'terminal', epoch)
                 # compute num of episodes in this epoch
                 if os.path.exists(path):
@@ -74,6 +74,8 @@ def main(
     meta_path,
     seg_csv_path,
     env_index,
+    start_epoch=1,
+    end_epoch=50,
 ):
     set_seed(env_index)
 
@@ -96,7 +98,7 @@ def main(
         # find the choosed episode in which agent & epoch
         find_flag = False
         for index_k, k in enumerate(env_choosed_indices[env]):
-            for index_l, l in enumerate(range(1, 51)):
+            for index_l, l in enumerate(range(start_epoch, end_epoch + 1)):
                 if cumu_episodes[env_index, index_k, index_l] > sample_episodes_this_env[j]:
                     find_flag = True
                     break
@@ -207,13 +209,19 @@ def main(
 
 if __name__ == '__main__':
     path_format = 'dataset/original/{}/{}/replay_logs/$store$_{}_ckpt.{}.gz'
-    save_dir = 'dataset/downsampled/'
     
+    # modify the following 5 variables:
+    # save_dir suffix, num_steps_per_env, total_envs, start_epoch, end_epoch
+
+    save_dir = 'dataset/downsampled/'
     num_agents = 2  # use data from 2 agents
     num_steps_per_env = 10e6  # num of transitions per env (10M)
-    num_processes = 64
+    num_processes = 32
     num_splits = 1  # depend on RAM size
     total_envs = TRAIN_ENVS
+    # epoch in [1, 50], represents the data quality
+    start_epoch = 1
+    end_epoch = 50
 
     total_envs = list(
         map(
@@ -240,7 +248,7 @@ if __name__ == '__main__':
 
     for envs in split_envs:
         env_choosed_indices, cumu_episodes, df = compute_cumulative_num_of_episodes(
-            envs, num_agents)
+            envs, num_agents, start_epoch, end_epoch)
         
         num_sample_episodes = np.ceil(
             num_steps_per_env / df.loc[:, 'Steps per episode'].values).astype(int)
@@ -249,7 +257,8 @@ if __name__ == '__main__':
         partial_main = partial(
             main, envs, env_choosed_indices, cumu_episodes, 
             df, num_sample_episodes, save_dir, L, tau,
-            traj_path, meta_path, seg_csv_path
+            traj_path, meta_path, seg_csv_path,
+            start_epoch=start_epoch, end_epoch=end_epoch,
         )
 
         process_map(
@@ -259,8 +268,11 @@ if __name__ == '__main__':
     
     # check the num of transitions
     meta_files = []
+    indices = []
     for file in os.listdir(meta_path):
         df = pd.read_csv(os.path.join(meta_path, file))
         meta_files.append(df)
-    concat_meta_file = pd.concat(meta_files, ignore_index=True)
+        indices.append(file[:-4])
+    concat_meta_file = pd.concat(meta_files)
+    concat_meta_file.index = indices
     print(concat_meta_file)

@@ -806,14 +806,25 @@ class JOWAModel(nn.Module):
             
             imagine_batch = {}
             dummy_size = batch['ends'].size(0) - avail_batch['ends'].size(0)
+
+            obs_shape = imagine_batch_obs.shape  # (b t patch)
             imagine_batch['observations'] = torch.cat((
                 torch.cat(
                     (
                         avail_batch['observations'][:, -max_blocks + horizon:], 
-                        wm_env.decode_obs_tokens(obs_tokens=imagine_batch_obs),
-                    ).mul(255).to(torch.uint8), 
+                        rearrange(
+                            wm_env.decode_obs_tokens(
+                                obs_tokens=imagine_batch_obs.view(
+                                    -1, obs_shape[-1]
+                                )
+                            ),
+                            '(b t) c h w -> b t c h w',
+                            b=obs_shape[0],
+                            t=obs_shape[1],
+                        )
+                    ),
                     dim=1,
-                ), 
+                ).mul(255).to(torch.uint8), 
                 torch.zeros(
                     dummy_size, *avail_batch['observations'].shape[1:], 
                     dtype=torch.uint8, 
