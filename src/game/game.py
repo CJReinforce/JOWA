@@ -87,7 +87,7 @@ class Game:
                     
                     self.save_recording(
                         np.stack(episode_buffer),
-                        f'{name_prefix}score_{info["return"]}_timestamp_{date}'
+                        f'{name_prefix_}score_{info["return"]}_timestamp_{date}'
                     )
                     episode_buffer = []
                     

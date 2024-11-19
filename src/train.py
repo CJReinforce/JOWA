@@ -71,7 +71,8 @@ class Trainer:
             ),  # avoid timeout when evaluating
         )
         local_rank = int(os.environ['LOCAL_RANK'])
-        torch.cuda.set_device(local_rank)
+        device_id = os.environ.get('DEVICE_ID')
+        torch.cuda.set_device(local_rank if device_id is None else int(device_id))
         
         # ddp settings
         self.world_size = int(os.environ['WORLD_SIZE'])
@@ -132,7 +133,7 @@ class Trainer:
             config_critic_arch=cfg.critic_head,
             config_critic_train=cfg.training.action,
             device=self.device,
-            name='JOWA_40M',
+            name='JOWA_150M',
         ).to(self.device)
         self.jowa_model = torch.nn.parallel.DistributedDataParallel(
             self.jowa_model, 
@@ -182,8 +183,8 @@ class Trainer:
         self.train_dataset = AtariTrajInMemory(
             data_dir='dataset/finetune/expert/trajectory/data', 
             csv_dir='dataset/finetune/expert/segment/csv', 
-            envs=cfg.common.envs,
-            csv_suffix="_right_padding", 
+            envs=cfg.common.envs, 
+            csv_suffix="_tau_1_right_padding", 
         )
 
         self.train_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -199,7 +200,7 @@ class Trainer:
             num_workers=cfg.datasets.train.num_of_workers // self.local_world_size,
             sampler=self.train_sampler,
             pin_memory=True,
-            prefetch_factor=2,
+            prefetch_factor=8,
         )
         
         if self.use_imagination:
@@ -498,7 +499,7 @@ class Trainer:
                 extra_logs[f"{str(jowa.module)}/train/real_bs"] = len(batch['ends'])
                 extra_logs[
                     f"{str(jowa.module)}/train/imagined_bs"
-                ] = 0 if imagine_batch_for_training is None else len(imagine_batch_for_training)
+                ] = 0 if imagine_batch_for_training is None else len(imagine_batch_for_training['ends'])
                 extra_logs[f"{str(jowa.module)}/train/train_critic"] = int(self.train_critic)
                 extra_logs[
                     f"{str(jowa.module)}/train/world_lr"
@@ -577,6 +578,7 @@ class Trainer:
                     }
                     wandb.log(logs)
 
+            # if using imagination batch for training, change the batch size of train_dataloader
             target_bs = (
                 self.cfg.training.world.batch_size - cfg_jowa.batch_size_in_imagination
             ) // self.world_size
@@ -590,6 +592,7 @@ class Trainer:
             training_time.append(end_time - start_time)
             start_time = time.time()
 
+            # stop training
             if self.global_training_step >= self.cfg.common.steps:
                 keep_running = False
                 break
@@ -741,10 +744,6 @@ class Trainer:
             if best:
                 assert score is not None
             
-            name_prefix = "best_ckpt_score_" + str(int(float(score))) + "_" if best else ""
-            step_ckpt_dir = self.ckpt_dir / f'{name_prefix}epoch_{epoch}_step_{self.global_training_step}'
-            step_ckpt_dir.mkdir(exist_ok=False, parents=False)
-            
             # remove oldest dir
             ckpts = [f for f in self.ckpt_dir.glob('epoch_*') if f.name.startswith('epoch_')]
             ckpts.sort(key=lambda p: p.stat().st_mtime)
@@ -756,6 +755,11 @@ class Trainer:
             ckpts.sort(key=lambda p: extract_score(p.name))
             if len(ckpts) > self.cfg.training.max_ckpts:
                 shutil.rmtree(ckpts[0])
+            
+            # mkdir
+            name_prefix = "best_ckpt_score_" + str(int(float(score))) + "_" if best else ""
+            step_ckpt_dir = self.ckpt_dir / f'{name_prefix}epoch_{epoch}_step_{self.global_training_step}'
+            step_ckpt_dir.mkdir(exist_ok=False, parents=False)
             
             torch.save(self.tokenizer.state_dict(), step_ckpt_dir / f'tokenizer.pt')
             for jowa in self.all_jowas:

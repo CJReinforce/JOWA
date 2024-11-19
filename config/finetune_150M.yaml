@@ -8,7 +8,7 @@ wandb:
   mode: online
   project: JOWA
   entity: null
-  name: planning_${training.action.use_imagination}_bw_${training.action.planning_beam_width}_h_${training.action.planning_horizon}_q_penalty_${training.action.q_penalty}_real_bs_${training.world.batch_size}_imagined_bs_${training.action.batch_size_in_imagination}_wm_lr_${training.world.learning_rate}_critic_lr_${training.action.learning_rate}_num_q_${critic_head.num_q}
+  name: planning_${training.action.use_imagination}_bw_${training.action.planning_beam_width}_h_${training.action.planning_horizon}_q_penalty_${training.action.q_penalty}_real_bs_${training.world.batch_size}_imagined_bs_${training.action.batch_size_in_imagination}_wm_lr_${training.world.learning_rate}_critic_lr_${training.action.learning_rate}_supervised_weight_${training.action.supervised_weight}_num_q_${critic_head.num_q}
   group: finetune
   tags: null
   notes: null
@@ -23,10 +23,10 @@ initialization:
 
 common:
   envs: [
-    MsPacman,
+    YarsRevenge,
   ]
-  epochs: 1000
-  steps: 10e3  # gradient steps
+  epochs: 10000
+  steps: 50e3 # 1e6  # gradient steps
   device: cuda
   do_checkpoint: True  # whether save optimizer
   seed: 0
@@ -35,11 +35,11 @@ common:
 training:
   should: True
   log_interval: 200
-  max_ckpts: 10
+  max_ckpts: 5
   dtype: bfloat16
   tokenizer:
     should: True
-    learning_rate: 0.00005
+    learning_rate: 0.0001
     batch_size: 128  # all batch_size in this file is the num in total, not per rank
     max_grad_norm: 1.0
   world:
@@ -52,8 +52,8 @@ training:
   action:
     learning_rate: ${training.world.learning_rate}
     train_critic_after_n_steps: -1  # means switching stages
-    use_imagination: True
-    imagine_after_n_steps: 3000  # imagine_after_n_steps > train_critic_after_n_steps
+    use_imagination: false
+    imagine_after_n_steps: 15000  # imagine_after_n_steps > train_critic_after_n_steps
     imagine_horizon: ${common.sequence_length}
     gamma: 0.99  # discount factor
     # Q distribution
@@ -62,9 +62,9 @@ training:
     num_atoms: 51
     # loss
     td_loss: c51  # in [c51, mse]
-    q_penalty: combo  # in [cql, combo, null]
+    q_penalty: cql  # in [cql, combo, null]
     cql_weight: 0.1  # for cql and combo
-    supervised_weight: 0.1  # only works when training critic head
+    supervised_weight: 0.5  # only works when training critic head
     # ablation
     use_rem: False
     use_task_embed: True
@@ -88,11 +88,11 @@ evaluation:
     save_reconstructions: True
   action:
     step_frequency: 125000
-    epoch_frequency: 10
+    epoch_frequency: 1
   env:
     # env_name: DemonAttack  # single env eval during training
     # buffer_size: 2
-    env_name: MsPacman
+    env_name: YarsRevenge
     buffer_size: 8
 
     num_eval_episodes: 1  # per rank
@@ -100,7 +100,7 @@ evaluation:
     fps: 15
     header: False  # verbose info
     do_reconstruction: False  # save reconstruction images with original images
-    save_mode: False  # save mp4 video
+    save_mode: True  # save mp4 video
 
 datasets:
   train:

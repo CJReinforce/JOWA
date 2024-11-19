@@ -96,11 +96,11 @@ After the first stage of pre-training, we recommend using the pre-trained vqvae 
 
 🚧 ***Fine-tuning code and dataset still in progress.***
 
-```python
-torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=39500 src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled wandb.mode=disabled
-```
+5 differences between pre-training and fine-tuning code: (i) the config file `finetune_150M.yaml` (ii) the reference of config file in line 872 of `src/train.py` (iii) the dataset in lines 183~188 of `src/train.py`. (iv) jowa model name in line 136 of `src/train.py`. (v) Set the id of a single GPU: `export DEVICE_ID=0`
 
-Three differences between pre-training and fine-tuning: (i) the config file `finetune_150M.yaml` (ii) the reference of config file in line 868 of `src/train.py` (iii) the dataset in lines 182~187 of `src/train.py`.
+```python
+torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=39500 src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled
+```
 
 ## 📝 TODO
 

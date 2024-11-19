@@ -475,8 +475,8 @@ class JOWAModel(nn.Module):
                     # positive Q
                     positive_bs = real_batch_size if \
                         self.q_penalty_method == 'combo' else mix_batch_size
-                    dataset_expec = q_s_chosen_a_dist[mix_batch['mask_padding']][
-                        :positive_bs
+                    dataset_expec = q_s_chosen_a_dist[:positive_bs][
+                        mix_batch['mask_padding'][:positive_bs]
                     ] @ self.atoms_support
                     q_value_positive_samples = dataset_expec.mean()
                     info_logs[
@@ -573,7 +573,9 @@ class JOWAModel(nn.Module):
                     # for real batch
                     positive_bs = real_batch_size if \
                         self.q_penalty_method == 'combo' else mix_batch_size
-                    dataset_expec = q[mix_batch['mask_padding']][:positive_bs]
+                    dataset_expec = q[:positive_bs][
+                        mix_batch['mask_padding'][:positive_bs]
+                    ]
                     q_value_positive_samples = dataset_expec.mean()
                     info_logs[
                         f'info/{str(self)}/q_value_of_positive_samples'
@@ -879,12 +881,12 @@ class JOWAModel(nn.Module):
                 dim=0,
             )
             
-            mask = torch.ones_like(
+            mask = torch.zeros_like(
                 imagine_batch['rewards'], 
                 dtype=torch.bool, 
                 device=device,
             )
-            mask[:, max_blocks - horizon:] = False
+            mask[:, max_blocks - horizon:] = True
             imagine_batch['mask_padding'] = mask
 
             return imagine_batch, {'synthetic amount': avail_idxs.sum().item()}
