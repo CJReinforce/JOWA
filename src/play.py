@@ -67,7 +67,11 @@ def main(cfg: DictConfig):
         device, 
         should_plan=cfg.common.use_planning,
         beam_width=cfg.common.beam_width,
-        horizon=cfg.common.horizon
+        horizon=cfg.common.horizon,
+        use_mean=cfg.common.use_mean,
+        use_count=cfg.common.use_count,
+        temperature=cfg.common.temperature,
+        num_simulations=cfg.common.num_simulations,
     ).to(device)
     
     agent.load(

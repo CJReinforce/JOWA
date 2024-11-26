@@ -1,13 +1,14 @@
 import os
 from copy import deepcopy
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
 from einops import rearrange
 from torch.cuda.amp import autocast
 
+from MCTS import MCTS
 from action_tokenizer import (
     action_masks,
     ATARI_NUM_ACTIONS,
@@ -30,9 +31,15 @@ class Agent(nn.Module):
         dtype=torch.float32, 
         buffer_size: int = 8,
         device: torch.device = torch.device('cuda'),
-        should_plan: bool = False,
+        should_plan: Union[bool, str] = False,  # [False, 'beam_search', 'MCTS']
+        # beam search
         beam_width: int = 2,
         horizon: int = 2,
+        # MCTS
+        num_simulations: Optional[int] = None,
+        temperature: float = 1.0,
+        use_mean=False,
+        use_count=False,
     ):
         super().__init__()
         self.tokenizer = tokenizer
@@ -41,10 +48,17 @@ class Agent(nn.Module):
         self.dtype = get_dtype(dtype) if isinstance(dtype, str) else dtype
         self.device = device
         self.buffer_size = buffer_size
+        assert should_plan in [False, 'beam_search', 'MCTS']
         self.should_plan = should_plan
         # beam search
         self.beam_width = beam_width
         self.horizon = horizon
+        # MCTS
+        self.num_simulations = beam_width ** 2 * (horizon - 1) + beam_width \
+            if num_simulations is None else num_simulations
+        self.temperature = temperature
+        self.use_mean = use_mean
+        self.use_count = use_count
         
         self.env_token = torch.LongTensor([env_token]).to(self.device)
         self.action_mask = action_masks.to(device)[env_token]
@@ -149,6 +163,10 @@ class Agent(nn.Module):
         critic = critic.masked_fill(~self.action_mask, -torch.inf)
         action = critic.argmax(dim=-1)
         return action
+    
+    def policy_induced_by_Q(self, critic: torch.Tensor, temperature: float) -> torch.Tensor:
+        assert critic.ndim <= 2
+        return (critic / temperature).softmax(-1)
 
     def random_action(self) -> torch.LongTensor:
         true_indices = torch.nonzero(self.action_mask.squeeze())
@@ -163,8 +181,10 @@ class Agent(nn.Module):
 
             if torch.rand(1).item() < 0.001:  # epsilon-eval
                 act = self.random_action()
-            elif self.should_plan:
-                act = self.plan()
+            elif self.should_plan == 'beam_search':
+                act = self.plan_beam_search()
+            elif self.should_plan == 'MCTS':
+                act = self.plan_MCTS()
             else:
                 outputs_wm = self.jowa_model(
                     self.token_buffer[:, :self.used_token_idx], 
@@ -175,7 +195,7 @@ class Agent(nn.Module):
         return act  # (1,)
 
     @torch.no_grad()
-    def plan(self, should_sample: bool = False) -> torch.LongTensor:
+    def plan_beam_search(self, should_sample: bool = False) -> torch.LongTensor:
         wm_env = WorldModelEnv(self.tokenizer, self.jowa_model, self.device, self.env_token)
         valid_actions = self.action_mask.sum().cpu().item()
 
@@ -235,7 +255,7 @@ class Agent(nn.Module):
             all_nodes_top_k_actions = torch.cat(
                 all_nodes_top_k_actions, 
                 dim=0,
-            )  # (constrained_beam_width * num_of_nodes, k)
+            )  # (constrained_beam_width * num_of_nodes, 1)
             all_nodes_cache = concate_kv(all_nodes_cache, repeat_num=constrained_beam_width)
             
             wm_env.env_tokens = self.env_token.repeat(all_nodes_top_k_actions.size(0))
@@ -282,3 +302,62 @@ class Agent(nn.Module):
             end_node = end_node.prev
         
         return end_node.action
+    
+    @torch.no_grad()
+    def plan_MCTS(self, should_sample: bool = False) -> torch.LongTensor:
+        wm_env = WorldModelEnv(self.tokenizer, self.jowa_model, self.device, self.env_token)
+        gamma = self.jowa_model.config_critic_train.gamma
+        mcts = MCTS(discount=gamma)
+
+        max_length = self.jowa_model.config_transformer.max_blocks
+        assert (self.used_token_idx + 1) % self.jowa_model.config_transformer.tokens_per_block == 0
+
+        # init dream
+        num_given_steps = min(
+            max_length - self.horizon, 
+            (self.used_token_idx + 1) // self.jowa_model.config_transformer.tokens_per_block
+        )
+        num_given_tokens = num_given_steps * self.jowa_model.config_transformer.tokens_per_block - 1
+        _ = wm_env.reset_from_initial_observations(
+            self.token_buffer[:, self.used_token_idx - num_given_tokens:self.used_token_idx], 
+            act_mode="logits",
+        )
+
+        mcts.generate_root_node()
+        mcts.root.kv_cache = deepcopy(wm_env.keys_values_wm)
+
+        critic = wm_env.last_actions
+        policy = self.policy_induced_by_Q(critic, self.temperature)
+        mcts.expand_the_children_of_the_root_node(policy, critic)
+
+        for _ in range(self.num_simulations):
+            history, search_path = mcts.initialize_history_node_searchpath_variable()
+            parent = mcts.choose_node_to_expand_using_max_ucb_score(
+                history, search_path, max_depth=self.horizon - 1)
+
+            _, reward, _, _ = wm_env.step(
+                torch.LongTensor([[history[-1]]]), 
+                should_sample=should_sample, 
+                act_mode="logits", 
+                kv_cache=deepcopy(parent.kv_cache),
+            )
+
+            mcts.update_reward_and_kv_cache_for_the_chosen_node(
+                reward.item(), deepcopy(wm_env.keys_values_wm))
+
+            critic = wm_env.last_actions
+            if self.use_mean:
+                value = critic.mean().item()  # mean or max
+            else:
+                value = critic.max().item()
+            policy = self.policy_induced_by_Q(critic, self.temperature)
+            
+            mcts.create_new_node_in_the_chosen_node_with_action_and_policy(
+                policy, critic)
+            mcts.back_propagate_and_update_min_max_bound(search_path, value)
+            
+        if self.use_count:
+            action = torch.tensor([mcts.root.children[u].visit_count for u in mcts.root.children.keys()]).argmax(keepdim=True)
+        else:
+            action = torch.tensor([i.value() for i in mcts.root.children.values()]).argmax(keepdim=True)
+        return action

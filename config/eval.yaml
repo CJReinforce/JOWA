@@ -19,6 +19,10 @@ common:
   beam_width: 1
   horizon: 0
   num_eval_episodes: 1
+  use_mean: False
+  use_count: False
+  temperature: 1.0
+  num_simulations: 20
 
   max_time: 10e10  # seconds
   max_steps: 108000

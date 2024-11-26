@@ -16,7 +16,7 @@ num_gpus=8
 
 
 # hyperparameters of JOWA's planning
-use_planning=True
+use_planning=beam_search
 
 # find hyperparameters in config json
 script_dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -51,7 +51,7 @@ if ! $find_flag; then
     # we employ this hyperparameter search for all algorithms that can handle variable-length input，
     # i.e., JOWA, MTBC, MGDT, and EDT
 fi
-# buffer_size=(1 2 3 4 5 6)
+
 
 echo model: "$ckpt_path"/"$model_name".pt
 echo game: "$game"
