@@ -86,25 +86,33 @@ This command processes the raw data into two formats: **(i) Trajectory-level dat
 
 ### Pre-training
 
+Start pre-training (including stage 1 and 2) with the following `torchrun` command:
+
 ```python
-torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=29500 src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled
+torchrun --nproc_per_node=8 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=39500 src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled
 ```
 
-After the first stage of pre-training, we recommend using the pre-trained vqvae to encode all images in advance via the `src/save_obs_in_token.py` file, and then use the `AtariTrajWithObsTokenInMemory` class as the dataset (in the `src/train.py` file at lines 170~179) to speed up loading, since vqvae is frozen in the second stage.
+However, after stage 1, we highly recommend the following steps to speed up training: 
+
+1. Use the pre-trained vqvae to encode all images in advance: `python src/save_obs_in_token.py` file.
+2. Use the `AtariTrajWithObsTokenInMemory` class as the dataset (uncomment lines 161~170 in the `src/train.py` file) to speed up loading, since vqvae is frozen in the second stage.
+3. Modify the config `config/train_xxM.yaml`. Set the `initialization.load_tokenizer` to the path of stage-1's checkpoint. Then set `training.action.train_critic_after_n_steps: -1` to train the critic immediately.
+4. Re-run the above `torchrun` command.
 
 ### Fine-tuning
 
-🚧 ***Fine-tuning code and dataset still in progress.***
-
-5 differences between pre-training and fine-tuning code: (i) the config file `finetune_150M.yaml` (ii) the reference of config file in line 872 of `src/train.py` (iii) the dataset in lines 183~188 of `src/train.py`. (iv) jowa model name in line 136 of `src/train.py`. (v) Set the id of a single GPU: `export DEVICE_ID=0`
+The fine-tuning dataset is [here](fine_tuning_dataset.zip). Please unzip this compressed file. Then set the id of a single GPU like: `export DEVICE_ID=0` and run the command:
 
 ```python
-torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=39500 src/train.py hydra/job_logging=disabled hydra/hydra_logging=disabled
+torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=39500 src/fine_tune.py hydra/job_logging=disabled hydra/hydra_logging=disabled
 ```
+
+After fine-tuning, modify and run `eval/eval_wo_planning.sh` to evaluate the checkpoint.
 
 ## 📝 TODO
 
 - \[x\] Release model weights.
 - \[x\] Optimize evaluation code.
 - \[x\] Optimize data preprocessing.
-- \[ \] Merge and optimize pretraining & fine-tuning codes.
+- \[x\] Merge and optimize pretraining & fine-tuning codes.
+- \[ \] Multi-env evaluation.

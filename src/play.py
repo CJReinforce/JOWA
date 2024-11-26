@@ -22,18 +22,6 @@ torch.backends.cudnn.benchmark = True
 
 @hydra.main(config_path="../config", config_name="eval")
 def main(cfg: DictConfig):
-    print('#' * 50)
-    info = {
-        'game': cfg.common.game_name, 
-        'buffer_size': cfg.common.num_given_steps, 
-        'use_planning': cfg.common.use_planning,
-        'beam_width': cfg.common.beam_width, 
-        'horizon': cfg.common.horizon,
-        'device': cfg.common.device,
-    }
-    pprint(info)
-    print('#' * 50)
-
     device = torch.device(cfg.common.device)
     env_fn = AtariEnvWrapper(cfg.common.game_name).create_env
     test_env = SingleProcessEnv(env_fn)

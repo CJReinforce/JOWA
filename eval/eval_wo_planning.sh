@@ -28,7 +28,7 @@ max_steps=108000
 
 for i in "${buffer_size[@]}"; do
     for j in $(seq 1 "$num_rollouts"); do
-        log_name="$model_name"_play_"$game"_buffer_size_"$i"_plan_"$use_planning"_bw_"$beam_width"_h_"$horizon"_date_$(date +%m%d_%H%M%S)_$RANDOM.log
+        log_name="$model_name"_play_"$game"_buffer_size_"$i"_date_$(date +%m%d_%H%M%S)_$RANDOM.log
         > $log_name  # clear log
 
         gpu_id=$((k % "$num_gpus"))

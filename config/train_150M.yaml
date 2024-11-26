@@ -1,8 +1,8 @@
 defaults:
   - _self_
   - tokenizer: default
-  - transformer: JOWA_40M
-  - critic_head: JOWA_40M
+  - transformer: JOWA_150M
+  - critic_head: JOWA_150M
 
 wandb:
   mode: online
@@ -17,7 +17,7 @@ initialization:
   load_tokenizer: null  # path of ckpt
   load_optimizer_tokenizer: False
   load_jowa: ${initialization.load_tokenizer}
-  load_jowa_name: JOWA_40M
+  load_jowa_name: JOWA_150M
   load_optimizer_jowa: False
   load_start_epoch: False
 

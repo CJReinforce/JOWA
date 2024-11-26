@@ -5,20 +5,23 @@ defaults:
   - critic_head: JOWA_150M
 
 initialization:
-  path_to_checkpoint: null
+  path_to_checkpoint: checkpoints/JOWA
   load_tokenizer: True
   load_jowa_model: True
-  tokenizer_name: null
+  tokenizer_name: tokenizer
   jowa_model_name: JOWA_150M
 
 common:
   game_name: Assault
   num_given_steps: 8  # in [1,8]
   device: "cuda:0"
+  num_eval_episodes: 1
+  # planning
   use_planning: False
+  # beam search
   beam_width: 1
   horizon: 0
-  num_eval_episodes: 1
+  # MCTS
   use_mean: False
   use_count: False
   temperature: 1.0
@@ -33,7 +36,7 @@ common:
   header: False
   do_reconstruction: False
   save_mode: False
-  save_rgb_img: True
+  save_rgb_img: False
 
 action:
   vmin: -10

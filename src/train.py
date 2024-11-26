@@ -1,6 +1,4 @@
-import functools
 import os
-import pickle
 import random
 import re
 import shutil
@@ -13,28 +11,19 @@ from pathlib import Path
 from pprint import pprint
 from typing import Dict
 
-import hydra
 import numpy as np
 import pandas as pd
 import torch
 import torch.distributed as dist
-import torch.multiprocessing as mp
 import wandb
 from einops import rearrange
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
-from PIL import Image
 from torch.cuda.amp import autocast
 from torch.utils.data import DataLoader, Dataset
-from torchvision.transforms import ToTensor
 from tqdm import tqdm
 
-from action_tokenizer import (
-    ATARI_NUM_ACTIONS,
-    GAME_NAMES,
-    batch_tokenize_envs,
-    tokenize_actions,
-)
+from action_tokenizer import ATARI_NUM_ACTIONS, GAME_NAMES
 from agent import Agent
 from dataset import (
     AtariTrajectory, 
@@ -133,7 +122,8 @@ class Trainer:
             config_critic_arch=cfg.critic_head,
             config_critic_train=cfg.training.action,
             device=self.device,
-            name='JOWA_150M',
+            name='JOWA' if cfg.initialization.load_jowa_name is None \
+                else cfg.initialization.load_jowa_name.rstrip('.pt'),
         ).to(self.device)
         self.jowa_model = torch.nn.parallel.DistributedDataParallel(
             self.jowa_model, 
@@ -160,12 +150,12 @@ class Trainer:
 
         # data
         # dataset for pretrain stage 1
-        # self.train_dataset = AtariTrajectory(
-        #     data_dir='dataset/downsampled/trajectory/data', 
-        #     csv_dir='dataset/downsampled/segment/csv', 
-        #     envs=cfg.common.envs,
-        #     csv_suffix="_right_padding", 
-        # )
+        self.train_dataset = AtariTrajectory(
+            data_dir='dataset/downsampled/trajectory/data', 
+            csv_dir='dataset/downsampled/segment/csv', 
+            envs=cfg.common.envs,
+            csv_suffix="_right_padding", 
+        )
 
         # dataset for pretrain stage 2
         # self.train_dataset = AtariTrajWithObsTokenInMemory(
@@ -178,14 +168,6 @@ class Trainer:
         # )
         # # use obs-token dataset only when not training tokenizer
         # assert not self.get_config_in_this_stage(cfg.training.tokenizer).should
-        
-        # dataset for finetune
-        self.train_dataset = AtariTrajInMemory(
-            data_dir='dataset/finetune/expert/trajectory/data', 
-            csv_dir='dataset/finetune/expert/segment/csv', 
-            envs=cfg.common.envs, 
-            csv_suffix="_tau_1_right_padding", 
-        )
 
         self.train_sampler = torch.utils.data.distributed.DistributedSampler(
             self.train_dataset, 
@@ -868,8 +850,7 @@ class Trainer:
         dist.destroy_process_group()
 
 
-# @hydra_main(config_path="../config", config_name="train_40M")
-@hydra_main(config_path="../config", config_name="finetune_150M")
+@hydra_main(config_path="../config", config_name="train_40M")
 def get_hydra_config(cfg: DictConfig) -> DictConfig:
     return cfg
 

@@ -9,7 +9,7 @@ wandb:
   project: JOWA
   entity: null
   name: planning_${training.action.use_imagination}_bw_${training.action.planning_beam_width}_h_${training.action.planning_horizon}_q_penalty_${training.action.q_penalty}_real_bs_${training.world.batch_size}_imagined_bs_${training.action.batch_size_in_imagination}_wm_lr_${training.world.learning_rate}_critic_lr_${training.action.learning_rate}_supervised_weight_${training.action.supervised_weight}_num_q_${critic_head.num_q}
-  group: finetune
+  group: finetune_${common.env}
   tags: null
   notes: null
 
@@ -22,11 +22,10 @@ initialization:
   load_start_epoch: False
 
 common:
-  envs: [
-    YarsRevenge,
-  ]
+  env: YarsRevenge
+  envs: ['${common.env}']
   epochs: 10000
-  steps: 50e3 # 1e6  # gradient steps
+  steps: 50e3  # gradient steps
   device: cuda
   do_checkpoint: True  # whether save optimizer
   seed: 0
@@ -52,8 +51,8 @@ training:
   action:
     learning_rate: ${training.world.learning_rate}
     train_critic_after_n_steps: -1  # means switching stages
-    use_imagination: false
-    imagine_after_n_steps: 15000  # imagine_after_n_steps > train_critic_after_n_steps
+    use_imagination: false  # enable model-based data synthesis
+    imagine_after_n_steps: 15000  # imagine_after_n_steps should > train_critic_after_n_steps
     imagine_horizon: ${common.sequence_length}
     gamma: 0.99  # discount factor
     # Q distribution
@@ -90,17 +89,15 @@ evaluation:
     step_frequency: 125000
     epoch_frequency: 1
   env:
-    # env_name: DemonAttack  # single env eval during training
-    # buffer_size: 2
-    env_name: YarsRevenge
-    buffer_size: 8
+    env_name: ${common.env}  # single env eval during training
+    buffer_size: 2
 
     num_eval_episodes: 1  # per rank
     max_time: 180  # seconds
     fps: 15
     header: False  # verbose info
     do_reconstruction: False  # save reconstruction images with original images
-    save_mode: True  # save mp4 video
+    save_mode: False  # save mp4 video
 
 datasets:
   train:
