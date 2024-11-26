@@ -44,13 +44,25 @@ Welcome to the official repository for our paper: "Scaling Offline Model-Based R
 
 Download the model weights from [here](checkpoints/JOWA) or [google drive](https://drive.google.com/drive/folders/1YHaCemhobchJWE5zt28TUrKp2tp8yysF?usp=sharing).
 
-Set hyperparameters of evaluation in `eval/eval.sh`, such as `model_name`, `game`, `num_rollouts`, and `num_gpus`. Then run this script:
+### Beam search
+
+Set hyperparameters in `eval/eval.sh`, such as `model_name`, `game`, `num_rollouts`, and `num_gpus`. Then run this script:
 
 ```bash
 bash eval/eval.sh
 ```
 
-The above command will run the setting number of rollouts (episodes) in parallel. After completing all evaluation processes, get the aggregate scores using the following command:
+### MCTS
+
+Set hyperparameters in `eval/eval_MCTS.sh`. The extra tunable hyperparameters for MCTS are `horizon`, `temperature`, and `num_simulations`. Then run this script:
+
+```bash
+bash eval/eval_MCTS.sh
+```
+
+### IQM Human-Normalized Score
+
+The above commands will run the setting number of rollouts (episodes) in parallel. After completing all evaluation processes, get the aggregate scores using the following command:
 
 ```python
 python eval/aggregate_scores.py --name JOWA_150M --env BeamRider

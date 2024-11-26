@@ -8,9 +8,9 @@ model_name="JOWA_150M"  # in [JOWA_150M, JOWA_70M, JOWA_40M]
 use_planning=MCTS
 horizon=6  # max depth of the tree, H in [1, 7]
 temperature=0.9
-num_simulations=20
-use_mean=False
-use_count=False
+num_simulations=20  # for the same expansion state budget as beam search, num_simulations = beam_width^2 * (beam_search_horizon - 1) + beam_width
+use_mean=False  # False means V=Q.max(), otherwise V=Q.mean()
+use_count=False  # False means argmax(root.children.value), otherwise argmax(root.children.visit_count)
 buffer_size=(8)
 
 # config of Atari
