@@ -28,8 +28,7 @@ Welcome to the official repository for our paper: "Scaling Offline Model-Based R
         only the first 7 minutes of the 2-hour gameplay are displayed. More demos are <a href=static/mp4>here</a>.
     </p>
 </div>
-  
-🚧 ***We are still updating and optimizing the code. Stay tuned for updates and additional resources!***
+
 
 ## 🚀 Installation
 
@@ -44,9 +43,9 @@ Welcome to the official repository for our paper: "Scaling Offline Model-Based R
 
 Download the model weights from [here](checkpoints/JOWA) or [google drive](https://drive.google.com/drive/folders/1YHaCemhobchJWE5zt28TUrKp2tp8yysF?usp=sharing).
 
-### Beam search
+### (Recommended) Beam search
 
-Set hyperparameters in `eval/eval.sh`, such as `model_name`, `game`, `num_rollouts`, and `num_gpus`. Then run this script:
+Use beam search as the planning algorithm. Set hyperparameters in `eval/eval.sh`, such as `model_name`, `game`, `num_rollouts`, and `num_gpus`. Then run this script:
 
 ```bash
 bash eval/eval.sh
@@ -54,10 +53,18 @@ bash eval/eval.sh
 
 ### MCTS
 
-Set hyperparameters in `eval/eval_MCTS.sh`. The extra tunable hyperparameters for MCTS are `horizon`, `temperature`, and `num_simulations`. Then run this script:
+Use MCTS as the planning algorithm. Set hyperparameters in `eval/eval_MCTS.sh`. The extra tunable hyperparameters for MCTS are `horizon`, `temperature`, and `num_simulations`. Then run this script:
 
 ```bash
 bash eval/eval_MCTS.sh
+```
+
+### Without Planning
+
+No planning algorithm during evaluation. 
+
+```bash
+bash eval/eval_wo_planning.sh
 ```
 
 ### IQM Human-Normalized Score
@@ -86,7 +93,7 @@ python results/results.py
 python src/datasets/download.py
 ```
 
-This will enable multi-process to download the original DQN-Replay dataset (~1TB for the default 20 games and 3.1TB for all 60 games).
+This will enable multi-process to download the original [DQN-Replay dataset](https://console.cloud.google.com/storage/browser/atari-replay-datasets) (~1TB for the default 20 games and 3.1TB for all 60 games).
 
 2. Process and downsample data
 
