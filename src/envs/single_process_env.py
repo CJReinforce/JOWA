@@ -30,3 +30,9 @@ class SingleProcessEnv(DoneTrackerEnv):
 
     def close(self) -> None:
         self.env.close()
+
+    def get_gray_scale_observation(self) -> np.ndarray:
+        return self.env._env._pool_and_resize()
+
+    def get_rgb_observation(self) -> np.ndarray:
+        return self.env._env.environment.ale.getScreenRGB2()

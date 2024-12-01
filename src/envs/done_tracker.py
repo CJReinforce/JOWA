@@ -17,6 +17,10 @@ class DoneTrackerEnv:
     @property
     def num_envs_done(self) -> int:
         return (self.done_tracker > 0).sum()
+    
+    @property
+    def all_done(self) -> bool:
+        return self.num_envs_done == self.num_envs
 
     @property
     def mask_dones(self) -> np.ndarray:

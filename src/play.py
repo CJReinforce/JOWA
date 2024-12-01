@@ -11,25 +11,21 @@ from omegaconf import DictConfig
 
 from action_tokenizer import ATARI_NUM_ACTIONS, GAME_NAMES
 from agent import Agent
-from envs import AtariEnvWrapper, SingleProcessEnv
+from envs import AtariEnvWrapper, SingleProcessEnv, MultiProcessEnv
 from game import AgentEnv, Game
 from models.jowa_model import JOWAModel
 from utils import set_seed
 
 warnings.filterwarnings("ignore")
-torch.backends.cudnn.benchmark = True
 
 
 @hydra.main(config_path="../config", config_name="eval")
 def main(cfg: DictConfig):
     device = torch.device(cfg.common.device)
     env_fn = AtariEnvWrapper(cfg.common.game_name).create_env
-    test_env = SingleProcessEnv(env_fn)
+    test_env = MultiProcessEnv(env_fn, cfg.common.num_envs)
     
     set_seed(cfg.common.seed)
-
-    h, w, _ = test_env.env.observation_space.shape
-    size = [h, w]
     
     tokenizer = instantiate(cfg.tokenizer)
     jowa_model = JOWAModel(
@@ -41,15 +37,11 @@ def main(cfg: DictConfig):
         device=device,
     )
     
-    env_token = torch.as_tensor(
-        [GAME_NAMES.index(cfg.common.game_name)], 
-        dtype=torch.long, 
-        device=device
-    )
     agent = Agent(
         tokenizer, 
         jowa_model, 
-        env_token, 
+        GAME_NAMES.index(cfg.common.game_name), 
+        test_env.num_envs, 
         cfg.common.dtype, 
         cfg.common.num_given_steps, 
         device, 
@@ -78,16 +70,10 @@ def main(cfg: DictConfig):
         do_reconstruction=cfg.common.do_reconstruction,
         verbose=cfg.common.verbose,
     )
-    keymap = 'empty'
-    if cfg.common.do_reconstruction:
-        size[1] *= 2
 
     game = Game(
         env, 
-        keymap_name=keymap, 
-        size=size, 
         fps=cfg.common.fps, 
-        verbose=bool(cfg.common.header), 
         record_mode=bool(cfg.common.save_mode),
         num_eval_episodes=cfg.common.num_eval_episodes,
         save_in_rgb=cfg.common.save_rgb_img
@@ -97,6 +83,7 @@ def main(cfg: DictConfig):
         max_steps=cfg.common.max_steps,
         name_prefix=f'{cfg.initialization.jowa_model_name}_play_{cfg.common.game_name}',
     )
+    test_env.close()
     
     static_metric('clipped_return', episode_info_collect)
     static_metric('return', episode_info_collect)

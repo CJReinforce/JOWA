@@ -11,7 +11,6 @@ from train import Trainer
 from utils import hydra_main
 
 warnings.filterwarnings("ignore")
-torch.backends.cudnn.benchmark = True
 
 
 class Tuner(Trainer):
@@ -40,6 +39,7 @@ class Tuner(Trainer):
             sampler=self.train_sampler,
             pin_memory=True,
             prefetch_factor=8,
+            drop_last=True,
         )
         
         if self.use_imagination:
@@ -57,6 +57,7 @@ class Tuner(Trainer):
                 sampler=self.imagine_sampler,
                 pin_memory=True,
                 prefetch_factor=2,
+                drop_last=True,
             )
             self.imagine_replay = ReplayBuffer(
                 sequence_length=cfg.common.sequence_length, 

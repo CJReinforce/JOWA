@@ -13,6 +13,7 @@ initialization:
 
 common:
   game_name: Assault
+  num_envs: 16
   num_given_steps: 8  # in [1,8]
   device: "cuda:0"
   num_eval_episodes: 1

@@ -113,10 +113,10 @@ However, after stage 1, we highly recommend the following steps to speed up trai
 
 ### Fine-tuning
 
-The fine-tuning dataset is [here](fine_tuning_dataset.zip). Please unzip this compressed file. Then set the id of a single GPU like: `export DEVICE_ID=0` and run the command:
+The fine-tuning dataset is [here](fine_tuning_dataset.zip). Please unzip this compressed file. Then run the command:
 
 ```python
-torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=39500 src/fine_tune.py hydra/job_logging=disabled hydra/hydra_logging=disabled
+DEVICE_ID=0 torchrun --nproc_per_node=1 --nnodes=1 --node_rank=0 --master_addr=127.0.0.1 --master_port=39500 src/fine_tune.py hydra/job_logging=disabled hydra/hydra_logging=disabled common.env=Pong training.action.use_imagination=True training.action.planning_horizon=2
 ```
 
 After fine-tuning, modify and run `eval/eval_wo_planning.sh` to evaluate the checkpoint.

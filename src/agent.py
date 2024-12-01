@@ -27,7 +27,8 @@ class Agent(nn.Module):
         self, 
         tokenizer: Tokenizer, 
         jowa_model: JOWAModel, 
-        env_token: int, 
+        env_token: Union[int, torch.Tensor], 
+        num_envs: int = 1, 
         dtype=torch.float32, 
         buffer_size: int = 8,
         device: torch.device = torch.device('cuda'),
@@ -49,6 +50,9 @@ class Agent(nn.Module):
         self.device = device
         self.buffer_size = buffer_size
         assert should_plan in [False, 'beam_search', 'MCTS']
+        assert not should_plan or (
+            should_plan in ['beam_search', 'MCTS'] and num_envs == 1
+        ), 'Multi-env evaluation is not supported for beam search and MCTS right now.'
         self.should_plan = should_plan
         # beam search
         self.beam_width = beam_width
@@ -60,9 +64,11 @@ class Agent(nn.Module):
         self.use_mean = use_mean
         self.use_count = use_count
         
-        self.env_token = torch.LongTensor([env_token]).to(self.device)
-        self.action_mask = action_masks.to(device)[env_token]
-        self.reset(1)
+        self.env_token = torch.LongTensor(
+            [env_token] * num_envs
+        ).to(self.device) if isinstance(env_token, int) else env_token
+        self.action_mask = action_masks.to(device)[self.env_token]
+        self.reset(num_envs)
         
     def reset(self, n: int) -> None:
         self.token_buffer = torch.zeros(
@@ -128,21 +134,20 @@ class Agent(nn.Module):
         return self
 
     def update_memory(self, input: torch.LongTensor) -> None:
-        if input.ndim == 2:
-            input = input[0]
+        assert input.ndim == 2
         
-        L_in = input.size(0)
+        L_in = input.size(1)
         L_out = self.jowa_model.config_transformer.tokens_per_block
         
         if self.used_token_idx + L_in <= self.token_buffer.size(1):
-            self.token_buffer[0, self.used_token_idx:self.used_token_idx + L_in] = input
+            self.token_buffer[:, self.used_token_idx:self.used_token_idx + L_in] = input
             self.used_token_idx += L_in
         else:
             buffer_clone = self.token_buffer.clone()
-            self.token_buffer[0, :self.used_token_idx - L_out] = buffer_clone[
-                0, L_out:self.used_token_idx]
+            self.token_buffer[:, :self.used_token_idx - L_out] = buffer_clone[
+                :, L_out:self.used_token_idx]
             self.token_buffer[
-                0, self.used_token_idx - L_out:self.used_token_idx - L_out + L_in] = input
+                :, self.used_token_idx - L_out:self.used_token_idx - L_out + L_in] = input
             self.used_token_idx += L_in - L_out
     
     def choose_action(self, critic: torch.FloatTensor) -> torch.LongTensor:
@@ -169,9 +174,10 @@ class Agent(nn.Module):
         return (critic / temperature).softmax(-1)
 
     def random_action(self) -> torch.LongTensor:
-        true_indices = torch.nonzero(self.action_mask.squeeze())
-        random_index = true_indices[torch.randint(0, true_indices.size(0), (1,)).item()]
-        return random_index.reshape(-1,)
+        rand = torch.rand_like(self.action_mask.float())
+        rand = rand.masked_fill(~self.action_mask, -torch.inf)
+        actions = rand.argmax(dim=-1)
+        return actions
     
     @torch.no_grad()
     def act(self, obs: torch.FloatTensor) -> torch.LongTensor:
@@ -192,7 +198,7 @@ class Agent(nn.Module):
                 )
                 act = self.choose_action(outputs_wm.logits_q)
 
-        return act  # (1,)
+        return act  # (num_envs,)
 
     @torch.no_grad()
     def plan_beam_search(self, should_sample: bool = False) -> torch.LongTensor:

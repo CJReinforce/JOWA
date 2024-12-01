@@ -52,7 +52,7 @@ training:
     learning_rate: ${training.world.learning_rate}
     train_critic_after_n_steps: -1  # means switching stages
     use_imagination: false  # enable model-based data synthesis
-    imagine_after_n_steps: 15000  # imagine_after_n_steps should > train_critic_after_n_steps
+    imagine_after_n_steps: 20000  # imagine_after_n_steps should > train_critic_after_n_steps
     imagine_horizon: ${common.sequence_length}
     gamma: 0.99  # discount factor
     # Q distribution
@@ -90,7 +90,8 @@ evaluation:
     epoch_frequency: 1
   env:
     env_name: ${common.env}  # single env eval during training
-    buffer_size: 2
+    buffer_size: 8
+    num_envs: 16
 
     num_eval_episodes: 1  # per rank
     max_time: 180  # seconds
@@ -101,7 +102,7 @@ evaluation:
 
 datasets:
   train:
-    num_of_workers: 16  # per node, not per rank
+    num_of_workers: 32  # per node, not per rank
 
 hydra:
   run:

@@ -881,13 +881,19 @@ class JOWAModel(nn.Module):
                 dim=0,
             )
             
-            mask = torch.zeros_like(
+            # mask = torch.zeros_like(
+            #     imagine_batch['rewards'], 
+            #     dtype=torch.bool, 
+            #     device=device,
+            # )
+            # mask[:, max_blocks - horizon:] = True
+            # imagine_batch['mask_padding'] = mask
+
+            imagine_batch['mask_padding'] = torch.ones_like(
                 imagine_batch['rewards'], 
                 dtype=torch.bool, 
                 device=device,
             )
-            mask[:, max_blocks - horizon:] = True
-            imagine_batch['mask_padding'] = mask
 
             return imagine_batch, {'synthetic amount': avail_idxs.sum().item()}
             

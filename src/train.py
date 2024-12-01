@@ -32,7 +32,7 @@ from dataset import (
     AtariTrajWithObsTokenInMemory,
     collate_fn,
 )
-from envs import AtariEnvWrapper, SingleProcessEnv
+from envs import AtariEnvWrapper, SingleProcessEnv, MultiProcessEnv
 from game import AgentEnv, Game
 from make_reconstructions import make_reconstructions_of_trajectories
 from models.jowa_model import JOWAModel
@@ -48,7 +48,6 @@ from utils import (
 )
 
 warnings.filterwarnings("ignore")
-torch.backends.cudnn.benchmark = True
 
 
 class Trainer:
@@ -90,6 +89,7 @@ class Trainer:
             save_root_dir.mkdir(exist_ok=False, parents=True)
             
             wandb.init(
+                settings=wandb.Settings(start_method='fork'),
                 config=OmegaConf.to_container(cfg, resolve=True),
                 reinit=True,
                 resume=True,
@@ -183,6 +183,7 @@ class Trainer:
             sampler=self.train_sampler,
             pin_memory=True,
             prefetch_factor=8,
+            drop_last=True,
         )
         
         if self.use_imagination:
@@ -200,6 +201,7 @@ class Trainer:
                 sampler=self.imagine_sampler,
                 pin_memory=True,
                 prefetch_factor=2,
+                drop_last=True,
             )
             self.imagine_replay = ReplayBuffer(
                 sequence_length=cfg.common.sequence_length, 
@@ -230,14 +232,6 @@ class Trainer:
         
         # evaluation
         if self.cfg.evaluation.should:
-            h, w = 84, 84
-            self.size = [h, 2 * w] if \
-                self.cfg.evaluation.env.do_reconstruction else [h, w]
-            self.env_token = torch.as_tensor(
-                [GAME_NAMES.index(cfg.evaluation.env.env_name)], 
-                dtype=torch.long, 
-                device=self.device,
-            )
             self.best_return = -np.inf
         
         dist.barrier()
@@ -634,15 +628,17 @@ class Trainer:
 
         for jowa in self.all_jowas:
             buffer_size = cfg_eval.env.buffer_size
+            num_envs = cfg_eval.env.num_envs // self.local_world_size
             
             # create env
             env_fn = AtariEnvWrapper(cfg_eval.env.env_name).create_env
-            test_env = SingleProcessEnv(env_fn)
+            test_env = MultiProcessEnv(env_fn, num_envs=num_envs)
             
             agent = Agent(
                 self.tokenizer.module, 
                 jowa.module, 
-                self.env_token, 
+                GAME_NAMES.index(cfg_eval.env.env_name), 
+                num_envs,
                 self.dtype, 
                 buffer_size, 
                 self.device,
@@ -660,31 +656,30 @@ class Trainer:
             
             game = Game(
                 env, 
-                keymap_name='empty', 
-                size=self.size, 
                 fps=int(cfg_eval.env.fps), 
-                verbose=bool(cfg_eval.env.header), 
                 record_mode=bool(cfg_eval.env.save_mode),
                 num_eval_episodes=int(cfg_eval.env.num_eval_episodes),
                 save_in_rgb=False,
                 record_dir=self.video_dir,
             )
 
+            # rollout
             episode_info_collect = game.run(
                 max_time=cfg_eval.env.max_time, 
             )
-            episode_info_summary = {
-                k: np.mean([i[k] for i in episode_info_collect]) \
-                    for k, v in episode_info_collect[0].items() if isinstance(v, (int, float))
-            }
+            test_env.close()
+
+            # gather score
+            ret_per_rank = np.concatenate(
+                [i['return'] for i in episode_info_collect], 0)
             
-            mean_return = torch.tensor(
-                [episode_info_summary['return']], 
+            ret_per_rank = torch.tensor(
+                ret_per_rank, 
                 dtype=torch.float32, 
                 device=self.device,
             )
-            ret_all = [torch.zeros_like(mean_return) for _ in range(self.world_size)]
-            dist.all_gather(ret_all, mean_return)
+            ret_all = [torch.zeros_like(ret_per_rank) for _ in range(self.world_size)]
+            dist.all_gather(ret_all, ret_per_rank)
             
             ret_all = torch.cat(ret_all, dim=0)
             mean_ret_all = ret_all.mean().item()
@@ -702,6 +697,7 @@ class Trainer:
 
             log = {
                 f"{str(jowa.module)}/eval/return": mean_ret_all,
+                f"{str(jowa.module)}/eval/num_rollouts": ret_all.size()[0],
                 f"{str(jowa.module)}/eval/used_buffer_size": buffer_size,
             }
             log.update(info)
